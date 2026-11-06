@@ -9,7 +9,7 @@
  * plain React state and native controls.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import { createRoot, type Root } from 'react-dom/client'
 import { FEATURES } from '../src/config/features'
@@ -22,6 +22,7 @@ import { CheatSheet } from '../src/components/CheatSheet'
 import { isMacPlatform, matchShortcut, shortcutChips } from '../src/config/shortcuts'
 import { BUILTIN_FONTS, CURATED_FONTS, fontCssHref, fontLinkId } from '../src/config/fonts'
 import { MIN_EDITOR_WIDTH } from '../src/config/layout'
+import { PAGES_UI, PAGES_VARIANTS, type PagesVariant } from '../src/config/pagesUi'
 import { RULES, runInspo, type InspoContext, type InspoEl, type InspoPage, type InspoResult, type Scored } from '../src/inspo'
 
 // ── Canvas ────────────────────────────────────────────────────────────────
@@ -8621,6 +8622,7 @@ export interface PageState {
   frame?: FrameV | null // Border (Stamp, etc.) — one per page
 }
 
+// Legacy "Saved" snapshot — read once for migration into pages.
 interface SaveSlot {
   id: string
   name: string
@@ -8629,7 +8631,16 @@ interface SaveSlot {
   folderId?: string
 }
 
-interface SaveFolder {
+// A page lives in at most one folder (one level). Every page autosaves.
+export interface Page extends PageState {
+  id: string
+  name: string
+  folderId?: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface Folder {
   id: string
   name: string
   collapsed?: boolean
@@ -8867,11 +8878,28 @@ function visibleBBox(node: SVGGElement): DOMRect {
 // stored shape is versioned; a different version is ignored, never
 // migrated blindly.
 const PAGES_KEY = 'sumi-pages'
-const PAGES_SCHEMA = 1
+const PAGES_SCHEMA = 2
 interface StoredPages {
   v: number
+  pages: Page[]
+  folders: Folder[]
+  currentId: string
+}
+// v1 kept an unnamed list + index; read for migration only.
+interface StoredPagesV1 {
+  v: 1
   pages: PageState[]
   idx: number
+}
+
+const newPageId = () => `pg-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`
+const newFolderId = () => `fld-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`
+
+// "Untitled", "Untitled 2", … — the smallest free number.
+function nextName(base: string, taken: string[]): string {
+  const set = new Set(taken)
+  if (!set.has(base)) return base
+  for (let n = 2; ; n++) if (!set.has(`${base} ${n}`)) return `${base} ${n}`
 }
 
 // First visit: a curated composition rather than a blank page — one red
@@ -8892,22 +8920,59 @@ function starterPage(p: Palette): PageState {
   }
 }
 
-function bootPages(p: Palette): { pages: PageState[]; idx: number; restored: boolean } {
+function bootPages(p: Palette): { pages: Page[]; folders: Folder[]; currentId: string; migratedSlots: boolean } {
+  let pages: Page[] = []
+  let folders: Folder[] = []
+  let currentId = ''
+  let migratedSlots = false
   if (typeof window !== 'undefined') {
+    const now = Date.now()
     try {
       const raw = localStorage.getItem(PAGES_KEY)
       if (raw) {
-        const parsed = JSON.parse(raw) as Partial<StoredPages>
+        const parsed = JSON.parse(raw) as Partial<StoredPages> | StoredPagesV1
         if (parsed.v === PAGES_SCHEMA && Array.isArray(parsed.pages) && parsed.pages.length > 0) {
-          const idx = Math.min(Math.max(0, Number(parsed.idx) || 0), parsed.pages.length - 1)
-          return { pages: parsed.pages, idx, restored: true }
+          pages = parsed.pages as Page[]
+          folders = Array.isArray((parsed as StoredPages).folders) ? (parsed as StoredPages).folders : []
+          currentId = String((parsed as StoredPages).currentId ?? '')
+        } else if (parsed.v === 1 && Array.isArray(parsed.pages) && parsed.pages.length > 0) {
+          // v1 → v2: give every page an id and a name.
+          const taken: string[] = []
+          pages = (parsed as StoredPagesV1).pages.map((ps) => {
+            const name = ps.name?.trim() || nextName('Untitled', taken)
+            taken.push(name)
+            return { ...ps, id: newPageId(), name, createdAt: now, updatedAt: now }
+          })
+          currentId = pages[Math.min(Math.max(0, Number((parsed as StoredPagesV1).idx) || 0), pages.length - 1)].id
         }
       }
     } catch {
       // corrupt storage — fall through to the starter
     }
+    // Legacy "Saved" snapshots (any era of key) become pages in a folder
+    // named "Saved" — names and dates kept. Keys are cleared after the
+    // first v2 autosave lands.
+    try {
+      const slotKeys = [SLOTS_KEY, ...LEGACY_SLOTS_KEYS]
+      const rawSlots = slotKeys.map((k) => localStorage.getItem(k)).find((v) => v !== null)
+      if (rawSlots) {
+        const slots = JSON.parse(rawSlots) as SaveSlot[]
+        if (Array.isArray(slots) && slots.length > 0) {
+          const saved: Folder = { id: `fld-saved-${now.toString(36)}`, name: nextName('Saved', folders.map((f) => f.name)) }
+          folders = [...folders, saved]
+          pages = [...pages, ...slots.map((sl) => ({ ...sl.page, id: `pg-mig-${sl.id}`, name: sl.name || 'Untitled', folderId: saved.id, createdAt: sl.savedAt || now, updatedAt: sl.savedAt || now }))]
+          migratedSlots = true
+        }
+      }
+    } catch {
+      // unreadable legacy saves — leave them alone
+    }
   }
-  return { pages: [starterPage(p)], idx: 0, restored: false }
+  if (pages.length === 0) {
+    pages = [{ ...starterPage(p), id: newPageId(), name: 'Untitled', createdAt: Date.now(), updatedAt: Date.now() }]
+  }
+  if (!pages.some((pg) => pg.id === currentId)) currentId = pages[0].id
+  return { pages, folders, currentId, migratedSlots }
 }
 
 function layerLabel(e: El): string {
@@ -8991,7 +9056,7 @@ function SumiEditor() {
   // localStorage is read exactly once, on the client (the editor never
   // renders on the server — see the desktop gate).
   const [boot] = useState(() => bootPages(initialPalette))
-  const bootPage = boot.pages[boot.idx]
+  const bootPage = boot.pages.find((pg) => pg.id === boot.currentId) ?? boot.pages[0]
   const [els, setEls] = useState<El[]>(() => structuredClone(bootPage.els))
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const nextId = useRef(boot.pages.reduce((m, pg) => pg.els.reduce((mm, e) => Math.max(mm, e.id), m), 0) + 1)
@@ -9086,13 +9151,14 @@ function SumiEditor() {
   const [editing, setEditing] = useState<{ id: number; left: number; top: number } | null>(null)
   // Alignment hairlines shown while dragging (canvas centre + element centres).
   const [guides, setGuides] = useState<{ axis: 'v' | 'h'; at: number }[]>([])
-  const [renamingPage, setRenamingPage] = useState<number | null>(null)
+  const [renamingPage, setRenamingPage] = useState<string | null>(null)
   // Layer-pane drag reorder.
   const dragLayer = useRef<number | null>(null)
   const [dropHint, setDropHint] = useState<{ id: number; below: boolean } | null>(null)
   // Saved-pane drag reorder.
-  const dragSlot = useRef<string | null>(null)
-  const [slotDropHint, setSlotDropHint] = useState<{ id: string; below: boolean } | null>(null)
+  const dragPage = useRef<string | null>(null)
+  const [pageDropHint, setPageDropHint] = useState<{ id: string; below: boolean } | null>(null)
+  const [folderDropHint, setFolderDropHint] = useState<string | null>(null)
   // Canvas zoom — ⌥ + mouse wheel over the workspace. Native listener with
   // passive:false so preventDefault can stop the page scroll.
   const [zoom, setZoom] = useState(1)
@@ -9244,7 +9310,7 @@ function SumiEditor() {
   const [ctxMenu, setCtxMenu] = useState<{
     x: number
     y: number
-    target: { kind: 'page'; idx: number } | { kind: 'slot'; id: string }
+    target: { kind: 'page'; id: string } | { kind: 'folder'; id: string }
   } | null>(null)
   // ⌘C / ⌘V / ⌘D element clipboard.
   const clipboardEls = useRef<El[]>([])
@@ -9283,7 +9349,6 @@ function SumiEditor() {
   const [preview, setPreview] = useState(false)
   const [previewIdx, setPreviewIdx] = useState(0)
   const [previewBg, setPreviewBg] = useState('#ffffff')
-  const [previewScope, setPreviewScope] = useState<'all' | 'pages' | 'saved'>('all')
   // Folder filter for the saved scope: 'all', 'unfiled', or a folder id.
   const [previewFolder, setPreviewFolder] = useState<string>('all')
   const [previewView, setPreviewView] = useState<'single' | 'grid' | 'list'>('single')
@@ -9547,40 +9612,31 @@ function SumiEditor() {
   // ── Pages & save slots ──────────────────────────────────────────────────
   // The active page lives in els/bg/texture/seed; `pages` stores snapshots
   // of every page, refreshed whenever we leave one.
-  const [pages, setPages] = useState<PageState[]>(boot.pages)
-  // Where the canvas is checked out from: an active page or a saved page.
-  // A page lives in exactly one section; edits bank back to its home.
-  const [loc, setLoc] = useState<{ kind: 'page'; idx: number } | { kind: 'slot'; id: string }>({ kind: 'page', idx: boot.idx })
-  const [slots, setSlots] = useState<SaveSlot[]>([])
-  const [renamingSlot, setRenamingSlot] = useState<string | null>(null)
-
-  const [folders, setFolders] = useState<SaveFolder[]>([])
+  const [pages, setPages] = useState<Page[]>(boot.pages)
+  const [folders, setFolders] = useState<Folder[]>(boot.folders)
+  // The page the canvas is checked out on. Edits bank back to it.
+  const [currentId, setCurrentId] = useState(boot.currentId)
   const [renamingFolder, setRenamingFolder] = useState<string | null>(null)
-  const [folderHint, setFolderHint] = useState<string | null>(null)
+  // "Delete folder?" asks: move its pages out, or delete them too.
+  const [folderDialog, setFolderDialog] = useState<string | null>(null)
+  // Pages UI variants (dev-only DialKit panel; freeze in src/config/pagesUi.ts).
+  const [pagesDefault] = useState<PagesVariant>(() => {
+    const q = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('pages') : null
+    return PAGES_VARIANTS.includes(q as PagesVariant) ? (q as PagesVariant) : PAGES_UI.variant
+  })
+  const pagesUi = useDialKit('Pages', {
+    pages: { type: 'select', options: PAGES_VARIANTS, default: pagesDefault },
+    thumbPx: [PAGES_UI.thumbPx, 48, 160, 4],
+    overviewCols: [PAGES_UI.overviewCols, 2, 8, 1],
+    tabThumbs: PAGES_UI.tabThumbs,
+  })
+  const pagesVariant = pagesUi.pages as PagesVariant
 
   const [recipes, setRecipes] = useState<Recipe[]>(BUILTIN_ASCII_RECIPES)
   const [recipeOpen, setRecipeOpen] = useState(false)
 
   useEffect(() => {
     try {
-      // One-time migration from pre-rename keys: newest era wins, then the
-      // old keys are cleared.
-      for (const [oldKeys, newKey] of [
-        [LEGACY_SLOTS_KEYS, SLOTS_KEY],
-        [LEGACY_FOLDERS_KEYS, FOLDERS_KEY],
-      ] as const) {
-        for (const oldKey of oldKeys) {
-          const legacy = localStorage.getItem(oldKey)
-          if (legacy !== null) {
-            if (localStorage.getItem(newKey) === null) localStorage.setItem(newKey, legacy)
-            localStorage.removeItem(oldKey)
-          }
-        }
-      }
-      const raw = localStorage.getItem(SLOTS_KEY)
-      if (raw) setSlots(JSON.parse(raw))
-      const rawF = localStorage.getItem(FOLDERS_KEY)
-      if (rawF) setFolders(JSON.parse(rawF))
       const rawR = localStorage.getItem(RECIPES_KEY)
       const savedRecipes: Recipe[] = rawR ? JSON.parse(rawR) : []
       // Built-ins always present and never shadowed by a stored copy sharing
@@ -9629,34 +9685,6 @@ function SumiEditor() {
     persistRecipes(recipes.filter((x) => x.id !== id))
   }
 
-  const persistFolders = (next: SaveFolder[]) => {
-    setFolders(next)
-    try {
-      localStorage.setItem(FOLDERS_KEY, JSON.stringify(next))
-    } catch {
-      flash('Could not persist — storage full?')
-    }
-  }
-
-  const addFolder = () => {
-    persistFolders([
-      ...folders,
-      { id: `fld-${Date.now()}-${Math.floor(Math.random() * 1e5)}`, name: `Folder ${folders.length + 1}` },
-    ])
-  }
-
-  const renameFolder = (id: string, name: string) => {
-    const clean = name.trim()
-    persistFolders(folders.map((f) => (f.id === id && clean ? { ...f, name: clean } : f)))
-    setRenamingFolder(null)
-  }
-
-  // Deleting a folder keeps its saves — they move back to the top level.
-  const deleteFolder = (id: string) => {
-    persistFolders(folders.filter((f) => f.id !== id))
-    persistSlots(slots.map((s) => (s.folderId === id ? { ...s, folderId: undefined } : s)))
-  }
-
   const currentPage = (): PageState => ({
     els: structuredClone(els),
     bg,
@@ -9668,20 +9696,27 @@ function SumiEditor() {
     pressGrain,
     overprint,
     frame,
-    name: loc.kind === 'page' ? pages[loc.idx]?.name : undefined,
+    name: pages.find((pg) => pg.id === currentId)?.name,
   })
 
   // Autosave — the pages list with the live page banked in, debounced.
   // Slot checkouts persist through persistSlots already; the pages list
   // still saves so switching back finds it.
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const legacyCleared = useRef(false)
   useEffect(() => {
     if (autosaveTimer.current) clearTimeout(autosaveTimer.current)
     autosaveTimer.current = setTimeout(() => {
-      const live = loc.kind === 'page' ? pages.map((pg, i) => (i === loc.idx ? { ...currentPage(), name: pg.name } : pg)) : pages
-      const payload: StoredPages = { v: PAGES_SCHEMA, pages: live, idx: loc.kind === 'page' ? loc.idx : 0 }
+      const live = pages.map((pg) => (pg.id === currentId ? { ...pg, ...currentPage(), name: pg.name, updatedAt: Date.now() } : pg))
+      const payload: StoredPages = { v: PAGES_SCHEMA, pages: live, folders, currentId }
       try {
         localStorage.setItem(PAGES_KEY, JSON.stringify(payload))
+        // Legacy saves were migrated into the "Saved" folder at boot; once
+        // v2 has landed they're redundant.
+        if (!legacyCleared.current) {
+          legacyCleared.current = true
+          for (const k of [SLOTS_KEY, FOLDERS_KEY, ...LEGACY_SLOTS_KEYS, ...LEGACY_FOLDERS_KEYS]) localStorage.removeItem(k)
+        }
       } catch {
         // quota (large images) or private mode — the session keeps working, it just won't restore
       }
@@ -9690,64 +9725,12 @@ function SumiEditor() {
       if (autosaveTimer.current) clearTimeout(autosaveTimer.current)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [els, bg, texture, seed, view, bgGrad, pressGrain, overprint, frame, pages, loc])
+  }, [els, bg, texture, seed, view, bgGrad, pressGrain, overprint, frame, pages, folders, currentId])
 
   const setCanvasSize = (w: number, h: number) => {
     const cw = Math.round(Math.min(4000, Math.max(50, w || VIEW_W)))
     const ch = Math.round(Math.min(4000, Math.max(50, h || VIEW_H)))
     setView((v) => (v.w === cw && v.h === ch ? v : { w: cw, h: ch }))
-  }
-
-  // Write the canvas back to wherever it was checked out from before moving
-  // elsewhere — pages and saved pages stay separate, edits never leak across.
-  const bankCurrent = () => {
-    const snap = currentPage()
-    if (loc.kind === 'page') {
-      const idx = loc.idx
-      setPages((arr) => arr.map((p, j) => (j === idx ? snap : p)))
-    } else {
-      const id = loc.id
-      persistSlots(slots.map((s) => (s.id === id ? { ...s, page: { ...snap, name: undefined } } : s)))
-    }
-  }
-
-  const renamePage = (i: number, name: string) => {
-    const clean = name.trim()
-    setPages((arr) => arr.map((p, j) => (j === i ? { ...p, name: clean || undefined } : p)))
-    setRenamingPage(null)
-  }
-
-  const deletePage = (i: number) => {
-    const blank = (): PageState => ({ els: [], bg: '#f7f6f2', texture: false, seed: Math.floor(Math.random() * 100000) })
-    // Bank the live canvas first so an undo restores exactly what was showing.
-    const removed: PageState = loc.kind === 'page' && loc.idx === i ? { ...currentPage(), name: pages[i]?.name } : pages[i]
-    const removedName = removed?.name ?? `Page ${i + 1}`
-    const remaining = pages.filter((_, j) => j !== i)
-    flash(`Deleted "${removedName}"`, {
-      label: 'Undo',
-      run: () => {
-        setPages((arr) => {
-          const next = [...arr]
-          next.splice(Math.min(i, next.length), 0, removed)
-          return next
-        })
-        bankCurrent()
-        setLoc({ kind: 'page', idx: Math.min(i, pages.length - 1) })
-        loadPage(removed)
-      },
-    })
-    if (loc.kind === 'page' && loc.idx === i) {
-      // The page under the canvas was deleted — fall back to a neighbour,
-      // or a fresh blank page if it was the last one.
-      const next = remaining.length > 0 ? remaining : [blank()]
-      const idx = Math.min(i, next.length - 1)
-      setPages(next)
-      setLoc({ kind: 'page', idx })
-      loadPage(next[idx])
-    } else {
-      setPages(remaining.length > 0 ? remaining : [blank()])
-      if (loc.kind === 'page' && loc.idx > i) setLoc({ kind: 'page', idx: loc.idx - 1 })
-    }
   }
 
   // Loading a page/slot resets per-canvas history (undo, checkpoint).
@@ -9828,158 +9811,181 @@ function SumiEditor() {
     }
   }
 
-  const switchPage = (i: number) => {
-    if (loc.kind === 'page' && i === loc.idx) return
-    const target = pages[i]
+  // ── Pages & folders ─────────────────────────────────────────────────────
+  const currentRecord = pages.find((pg) => pg.id === currentId) ?? pages[0]
+  const pageNames = () => pages.map((pg) => pg.name)
+  // The page as it should be read right now: live canvas for the current one.
+  const livePage = (pg: Page): Page => (pg.id === currentId ? { ...pg, ...currentPage(), name: pg.name } : pg)
+  const bankCurrent = () => {
+    const snap = currentPage()
+    setPages((arr) => arr.map((pg) => (pg.id === currentId ? { ...pg, ...snap, name: pg.name, updatedAt: Date.now() } : pg)))
+  }
+  // Insert after the last page of a group (unfiled or a folder), else at the end.
+  const insertInGroup = (arr: Page[], pg: Page): Page[] => {
+    let at = -1
+    arr.forEach((x, i) => {
+      if ((x.folderId ?? null) === (pg.folderId ?? null)) at = i
+    })
+    const next = [...arr]
+    next.splice(at >= 0 ? at + 1 : next.length, 0, pg)
+    return next
+  }
+  const openPage = (id: string) => {
+    if (id === currentId) return
+    const target = pages.find((pg) => pg.id === id)
     if (!target) return
     bankCurrent()
-    setLoc({ kind: 'page', idx: i })
+    setCurrentId(id)
     loadPage(target)
   }
-
-  const addPage = () => {
-    const fresh: PageState = {
-      els: [{ id: nextId.current++, type: 'shape', v: defShape(palette) }],
-      bg: '#f7f6f2',
-      texture: false,
-      seed: Math.floor(Math.random() * 100000),
-    }
+  const addPage = (folderId?: string) => {
+    const now = Date.now()
+    const fresh: Page = { id: newPageId(), name: nextName('Untitled', pageNames()), folderId, els: [], bg: '#f7f6f2', texture: false, seed: Math.floor(Math.random() * 100000), w: view.w, h: view.h, createdAt: now, updatedAt: now }
     bankCurrent()
-    setPages((arr) => [...arr, fresh])
-    setLoc({ kind: 'page', idx: pages.length })
+    setPages((arr) => insertInGroup(arr, fresh))
+    if (folderId) setFolders((fs) => fs.map((f) => (f.id === folderId ? { ...f, collapsed: false } : f)))
+    setCurrentId(fresh.id)
     loadPage(fresh)
   }
-
-  const persistSlots = (next: SaveSlot[]) => {
-    setSlots(next)
-    try {
-      localStorage.setItem(SLOTS_KEY, JSON.stringify(next))
-    } catch {
-      flash('Could not persist — storage full?')
-    }
-  }
-
-  // "Save this page" MOVES the active page into Saved — no duplicate stays
-  // behind. The canvas keeps showing it, now checked out from Saved.
-  const saveSlot = () => {
-    if (loc.kind !== 'page') return
-    const idx = loc.idx
-    const name = pages[idx]?.name ?? `Page ${idx + 1}`
-    const slot: SaveSlot = {
-      id: `${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
-      name,
-      savedAt: Date.now(),
-      page: { ...currentPage(), name: undefined },
-    }
-    persistSlots([slot, ...slots])
-    setPages((arr) => arr.filter((_, j) => j !== idx))
-    setLoc({ kind: 'slot', id: slot.id })
-    flash(`"${name}" moved to Saved`)
-  }
-
-  const renameSlot = (id: string, name: string) => {
+  const renamePage = (id: string, name: string) => {
     const clean = name.trim()
-    persistSlots(slots.map((s) => (s.id === id && clean ? { ...s, name: clean } : s)))
-    setRenamingSlot(null)
+    setRenamingPage(null)
+    if (!clean) return
+    setPages((arr) => arr.map((pg) => (pg.id === id ? { ...pg, name: clean, updatedAt: Date.now() } : pg)))
   }
-
-  // Today → time, otherwise date.
-  const fmtWhen = (ts: number) => {
-    const d = new Date(ts)
-    return d.toDateString() === new Date().toDateString()
-      ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-      : d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+  const duplicatePage = (id: string) => {
+    const src = pages.find((pg) => pg.id === id)
+    if (!src) return
+    const now = Date.now()
+    const copy: Page = { ...structuredClone(livePage(src)), id: newPageId(), name: `${src.name} copy`, createdAt: now, updatedAt: now }
+    setPages((arr) => {
+      const i = arr.findIndex((pg) => pg.id === id)
+      const next = [...arr]
+      next.splice(i + 1, 0, copy)
+      return next
+    })
+    flash('Page duplicated')
   }
-
-  const loadSlot = (s: SaveSlot) => {
-    if (loc.kind === 'slot' && loc.id === s.id) return
-    bankCurrent()
-    setLoc({ kind: 'slot', id: s.id })
-    loadPage(structuredClone(s.page))
+  // Delete with undo: the removed record goes back to its index.
+  const deletePage = (id: string) => {
+    const i = pages.findIndex((pg) => pg.id === id)
+    if (i < 0) return
+    const removed = livePage(pages[i])
+    const remaining = pages.filter((pg) => pg.id !== id)
+    const wasCurrent = id === currentId
+    let fallback: Page | null = null
+    if (wasCurrent) {
+      // Prefer a neighbour in the same group, then any page, then a fresh one.
+      const group = remaining.filter((pg) => (pg.folderId ?? null) === (removed.folderId ?? null))
+      fallback = group[Math.min(i, group.length - 1)] ?? remaining[Math.min(i, remaining.length - 1)] ?? null
+      if (!fallback) {
+        const now = Date.now()
+        fallback = { id: newPageId(), name: 'Untitled', els: [], bg: '#f7f6f2', texture: false, seed: Math.floor(Math.random() * 100000), w: view.w, h: view.h, createdAt: now, updatedAt: now }
+      }
+    }
+    const next = wasCurrent && fallback && !remaining.some((pg) => pg.id === fallback!.id) ? [...remaining, fallback] : remaining
+    setPages(next)
+    if (wasCurrent && fallback) {
+      setCurrentId(fallback.id)
+      loadPage(fallback)
+    }
+    flash(`Deleted "${removed.name}"`, {
+      label: 'Undo',
+      run: () => {
+        if (!wasCurrent) bankCurrent()
+        setPages((arr) => {
+          const n = arr.filter((pg) => pg.id !== removed.id)
+          n.splice(Math.min(i, n.length), 0, removed)
+          return n
+        })
+        if (wasCurrent) {
+          setCurrentId(removed.id)
+          loadPage(removed)
+        }
+      },
+    })
   }
-
-  // Duplicate the row under the context menu. If it's the page the canvas is
-  // checked out on, duplicate the LIVE state, not the stale banked snapshot.
+  const movePage = (id: string, folderId: string | undefined) => {
+    setPages((arr) => {
+      const pg = arr.find((x) => x.id === id)
+      if (!pg) return arr
+      return insertInGroup(arr.filter((x) => x.id !== id), { ...pg, folderId })
+    })
+    if (folderId) setFolders((fs) => fs.map((f) => (f.id === folderId ? { ...f, collapsed: false } : f)))
+  }
+  // Drop a dragged page before/after a target page — adopting its folder.
+  const reorderPage = (srcId: string, targetId: string, below: boolean) => {
+    if (srcId === targetId) return
+    setPages((arr) => {
+      const src = arr.find((x) => x.id === srcId)
+      if (!src) return arr
+      const without = arr.filter((x) => x.id !== srcId)
+      const t = without.findIndex((x) => x.id === targetId)
+      if (t < 0) return arr
+      const next = [...without]
+      next.splice(below ? t + 1 : t, 0, { ...src, folderId: without[t].folderId })
+      return next
+    })
+  }
+  const endPageDrag = () => {
+    dragPage.current = null
+    setPageDropHint(null)
+    setFolderDropHint(null)
+  }
+  const addFolder = () => {
+    const f: Folder = { id: newFolderId(), name: nextName('Folder', folders.map((x) => x.name)) }
+    setFolders((fs) => [...fs, f])
+    setRenamingFolder(f.id)
+  }
+  const renameFolder = (id: string, name: string) => {
+    const clean = name.trim()
+    setRenamingFolder(null)
+    if (!clean) return
+    setFolders((fs) => fs.map((f) => (f.id === id ? { ...f, name: clean } : f)))
+  }
+  const toggleFolder = (id: string) => setFolders((fs) => fs.map((f) => (f.id === id ? { ...f, collapsed: !f.collapsed } : f)))
+  // Delete a folder: move its pages out, or delete them with it. Undoable.
+  const deleteFolder = (id: string, mode: 'move' | 'delete') => {
+    setFolderDialog(null)
+    const f = folders.find((x) => x.id === id)
+    if (!f) return
+    const inside = pages.filter((pg) => pg.folderId === id).map(livePage)
+    const before = pages.map(livePage)
+    const beforeFolders = folders
+    setFolders((fs) => fs.filter((x) => x.id !== id))
+    if (mode === 'move') setPages((arr) => arr.map((pg) => (pg.folderId === id ? { ...pg, folderId: undefined } : pg)))
+    else {
+      let remaining = pages.filter((pg) => pg.folderId !== id)
+      if (inside.some((pg) => pg.id === currentId)) {
+        let fallback = remaining[0] ?? null
+        if (!fallback) {
+          const now = Date.now()
+          fallback = { id: newPageId(), name: 'Untitled', els: [], bg: '#f7f6f2', texture: false, seed: Math.floor(Math.random() * 100000), w: view.w, h: view.h, createdAt: now, updatedAt: now }
+          remaining = [fallback]
+        }
+        setCurrentId(fallback.id)
+        loadPage(fallback)
+      }
+      setPages(remaining)
+    }
+    flash(mode === 'move' ? `Folder "${f.name}" removed — ${inside.length} page${inside.length === 1 ? '' : 's'} moved out` : `Deleted "${f.name}" and ${inside.length} page${inside.length === 1 ? '' : 's'}`, {
+      label: 'Undo',
+      run: () => {
+        setFolders(beforeFolders)
+        setPages(before)
+        if (mode === 'delete' && inside.some((pg) => pg.id === currentId) === false && !before.some((pg) => pg.id === currentId)) {
+          setCurrentId(before[0].id)
+          loadPage(before[0])
+        }
+      },
+    })
+  }
+  // Context menu actions (pages and folders).
   const duplicateFromMenu = () => {
     const m = ctxMenu
     setCtxMenu(null)
-    if (!m) return
-    if (m.target.kind === 'page') {
-      const idx = m.target.idx
-      const src = loc.kind === 'page' && loc.idx === idx ? currentPage() : pages[idx]
-      if (!src) return
-      const copy = structuredClone(src)
-      copy.name = src.name ? `${src.name} copy` : undefined
-      setPages((arr) => {
-        const next = [...arr]
-        next.splice(idx + 1, 0, copy)
-        return next
-      })
-      if (loc.kind === 'page' && loc.idx > idx) setLoc({ kind: 'page', idx: loc.idx + 1 })
-      flash('Page duplicated')
-    } else {
-      const id = m.target.id
-      const i = slots.findIndex((s) => s.id === id)
-      if (i < 0) return
-      const src = slots[i]
-      const page = loc.kind === 'slot' && loc.id === id ? { ...currentPage(), name: undefined } : structuredClone(src.page)
-      const copy: SaveSlot = {
-        id: `${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
-        name: `${src.name} copy`,
-        savedAt: Date.now(),
-        page,
-      }
-      const next = [...slots]
-      next.splice(i + 1, 0, copy)
-      persistSlots(next)
-      flash('Saved page duplicated')
-    }
-  }
-
-  const dropSlot = (targetId: string, below: boolean) => {
-    const src = dragSlot.current
-    dragSlot.current = null
-    setSlotDropHint(null)
-    if (src == null || src === targetId) return
-    const next = [...slots]
-    const from = next.findIndex((s) => s.id === src)
-    if (from < 0) return
-    const [movedSlot] = next.splice(from, 1)
-    let to = next.findIndex((s) => s.id === targetId)
-    if (to < 0) return
-    // Dropping next to a save adopts its folder — reorder and file in one move.
-    const target = next[to]
-    if (below) to += 1
-    next.splice(to, 0, { ...movedSlot, folderId: target.folderId })
-    persistSlots(next)
-  }
-
-  // Drop a dragged save onto a folder header → file it at the folder's end.
-  const dropSlotToFolder = (folderId: string) => {
-    const src = dragSlot.current
-    dragSlot.current = null
-    setSlotDropHint(null)
-    setFolderHint(null)
-    if (src == null) return
-    const next = [...slots]
-    const from = next.findIndex((s) => s.id === src)
-    if (from < 0) return
-    const [movedSlot] = next.splice(from, 1)
-    next.push({ ...movedSlot, folderId })
-    persistSlots(next)
-    // Reveal the destination so the drop lands somewhere visible.
-    persistFolders(folders.map((f) => (f.id === folderId ? { ...f, collapsed: false } : f)))
-  }
-
-  const deleteSlot = (id: string) => {
-    persistSlots(slots.filter((x) => x.id !== id))
-    if (loc.kind === 'slot' && loc.id === id) {
-      // The page under the canvas was deleted — fall back to an active page.
-      const target = pages[0] ?? { els: [], bg: '#f7f6f2', texture: false, seed: Math.floor(Math.random() * 100000) }
-      if (pages.length === 0) setPages([target])
-      setLoc({ kind: 'page', idx: 0 })
-      loadPage(target)
-    }
+    if (!m || m.target.kind !== 'page') return
+    duplicatePage(m.target.id)
   }
 
   // Import an uploaded/dropped image: downscale + re-encode so pages and
@@ -12542,7 +12548,10 @@ function SumiEditor() {
     selectAll,
     hide: hideSelected,
     lock: lockSelected,
-    save: saveSlot,
+    save: () => {
+      bankCurrent()
+      flash('Saved — every page autosaves')
+    },
     zoomFit: () => setZoom(1),
     zoom100,
     zoomIn: () => zoomBy(1.25),
@@ -12574,16 +12583,15 @@ function SumiEditor() {
     setTlPlaying((pl) => !pl)
     return true
   }
-  // Arrow keys with nothing selected, while on a saved page → flip through
-  // the Saved list. Returns whether the key was handled.
+  // Arrow keys with nothing selected flip through the pages. Returns
+  // whether the key was handled.
   const slotNavRef = useRef<(dir: -1 | 1) => boolean>(() => false)
   slotNavRef.current = (dir) => {
-    if (loc.kind !== 'slot') return false
-    const i = slots.findIndex((s) => s.id === loc.id)
-    if (i < 0) return false
-    const next = slots[i + dir]
+    const i = pages.findIndex((pg) => pg.id === currentId)
+    if (i < 0 || pages.length < 2) return false
+    const next = pages[i + dir]
     if (!next) return true // at the end of the list — swallow the key anyway
-    loadSlot(next)
+    openPage(next.id)
     return true
   }
   useEffect(() => {
@@ -13105,6 +13113,207 @@ function SumiEditor() {
   const btn =
     'inline-flex items-center gap-1.5 rounded border border-neutral-300 bg-paper px-2 py-1 font-mono text-[11px] text-ink hover:border-neutral-500 transition-colors duration-150 disabled:opacity-40 disabled:pointer-events-none'
 
+  // ── Pages panel (left sidebar) ──────────────────────────────────────────
+  const [hoverThumb, setHoverThumb] = useState<{ id: string; x: number; y: number } | null>(null)
+  const [addMenuOpen, setAddMenuOpen] = useState(false)
+  const pageThumb = (pg: Page, width: number, cls = '') => (
+    <div className={`overflow-hidden rounded-sm border border-neutral-300 bg-paper ${cls}`} style={{ width, aspectRatio: `${pg.w ?? VIEW_W} / ${pg.h ?? VIEW_H}` }}>
+      <PreviewCanvas page={livePage(pg) as PageState} ns={`-pt-${pg.id}`} />
+    </div>
+  )
+  const pageRowDrag = (pg: Page) => ({
+    draggable: true,
+    onDragStart: (ev: DragEvent) => {
+      dragPage.current = pg.id
+      ev.dataTransfer.effectAllowed = 'move'
+      ev.dataTransfer.setData('text/plain', pg.id)
+    },
+    onDragOver: (ev: DragEvent) => {
+      if (!dragPage.current || dragPage.current === pg.id) return
+      ev.preventDefault()
+      const r = (ev.currentTarget as HTMLElement).getBoundingClientRect()
+      const below = ev.clientY > r.top + r.height / 2
+      setPageDropHint((h) => (h && h.id === pg.id && h.below === below ? h : { id: pg.id, below }))
+      setFolderDropHint(null)
+    },
+    onDragLeave: () => setPageDropHint((h) => (h?.id === pg.id ? null : h)),
+    onDrop: (ev: DragEvent) => {
+      ev.preventDefault()
+      const src = dragPage.current
+      const hint = pageDropHint
+      endPageDrag()
+      if (src && src !== pg.id) reorderPage(src, pg.id, hint?.id === pg.id ? hint.below : true)
+    },
+    onDragEnd: endPageDrag,
+  })
+  const folderDrop = (folderId: string | undefined) => ({
+    onDragOver: (ev: DragEvent) => {
+      if (!dragPage.current) return
+      ev.preventDefault()
+      setFolderDropHint(folderId ?? '__unfiled')
+      setPageDropHint(null)
+    },
+    onDragLeave: () => setFolderDropHint((h) => (h === (folderId ?? '__unfiled') ? null : h)),
+    onDrop: (ev: DragEvent) => {
+      ev.preventDefault()
+      const src = dragPage.current
+      endPageDrag()
+      if (src) movePage(src, folderId)
+    },
+  })
+  const pageRow = (pg: Page, indent = false) => (
+    <li
+      key={pg.id}
+      className={`group relative flex items-center gap-1 border-y-2 ${pageDropHint?.id === pg.id ? (pageDropHint.below ? 'border-b-ink border-t-transparent' : 'border-t-ink border-b-transparent') : 'border-transparent'} ${indent ? 'pl-3' : ''}`}
+      {...pageRowDrag(pg)}
+      onMouseEnter={(ev) => {
+        const r = (ev.currentTarget as HTMLElement).getBoundingClientRect()
+        setHoverThumb({ id: pg.id, x: r.right + 8, y: r.top })
+      }}
+      onMouseLeave={() => setHoverThumb((h) => (h?.id === pg.id ? null : h))}
+    >
+      {renamingPage === pg.id ? (
+        <input
+          autoFocus
+          defaultValue={pg.name}
+          aria-label="Page name"
+          onFocus={(e) => e.target.select()}
+          onBlur={(e) => renamePage(pg.id, e.target.value)}
+          onKeyDown={(e) => {
+            e.stopPropagation()
+            if (e.key === 'Enter') renamePage(pg.id, (e.target as HTMLInputElement).value)
+            if (e.key === 'Escape') setRenamingPage(null)
+          }}
+          className="w-full rounded border border-neutral-300 bg-paper px-2 py-1 font-mono text-[11px] outline-none focus:border-ink"
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => openPage(pg.id)}
+          onDoubleClick={() => setRenamingPage(pg.id)}
+          onContextMenu={(e) => {
+            e.preventDefault()
+            setCtxMenu({ x: e.clientX, y: e.clientY, target: { kind: 'page', id: pg.id } })
+          }}
+          className={`min-w-0 flex-1 truncate rounded px-2 py-1 text-left font-mono text-[11px] transition-colors duration-150 ${
+            pg.id === currentId ? 'bg-black/[0.06] font-medium text-ink' : 'text-neutral-700 hover:bg-black/[0.04] hover:text-ink'
+          }`}
+        >
+          {pg.name}
+        </button>
+      )}
+      {renamingPage !== pg.id && (
+        <button
+          type="button"
+          className={`${btn} shrink-0 px-1.5 opacity-0 transition-opacity duration-100 group-hover:opacity-100 focus-visible:opacity-100`}
+          aria-label={`Page menu: ${pg.name}`}
+          onClick={(e) => {
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+            setCtxMenu({ x: r.left, y: r.bottom + 4, target: { kind: 'page', id: pg.id } })
+          }}
+        >
+          …
+        </button>
+      )}
+    </li>
+  )
+  const folderHeader = (f: Folder) => {
+    const n = pages.filter((pg) => pg.folderId === f.id).length
+    return (
+      <li key={`f-${f.id}`} className={`group flex items-center gap-1 rounded ${folderDropHint === f.id ? 'bg-black/[0.06] ring-1 ring-ink/40' : ''}`} {...folderDrop(f.id)}>
+        <button type="button" onClick={() => toggleFolder(f.id)} aria-label={f.collapsed ? 'Expand folder' : 'Collapse folder'} aria-expanded={!f.collapsed} className="shrink-0 px-1 font-mono text-[10px] text-neutral-500">
+          {f.collapsed ? '▸' : '▾'}
+        </button>
+        {renamingFolder === f.id ? (
+          <input
+            autoFocus
+            defaultValue={f.name}
+            aria-label="Folder name"
+            onFocus={(e) => e.target.select()}
+            onBlur={(e) => renameFolder(f.id, e.target.value)}
+            onKeyDown={(e) => {
+              e.stopPropagation()
+              if (e.key === 'Enter') renameFolder(f.id, (e.target as HTMLInputElement).value)
+              if (e.key === 'Escape') setRenamingFolder(null)
+            }}
+            className="w-full rounded border border-neutral-300 bg-paper px-2 py-1 font-mono text-[11px] outline-none focus:border-ink"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => toggleFolder(f.id)}
+            onDoubleClick={() => setRenamingFolder(f.id)}
+            onContextMenu={(e) => {
+              e.preventDefault()
+              setCtxMenu({ x: e.clientX, y: e.clientY, target: { kind: 'folder', id: f.id } })
+            }}
+            className="min-w-0 flex-1 truncate rounded px-1 py-1 text-left font-mono text-[11px] text-ink"
+          >
+            {f.name} <span className="text-neutral-500">{n}</span>
+          </button>
+        )}
+        {renamingFolder !== f.id && (
+          <button
+            type="button"
+            className={`${btn} shrink-0 px-1.5 opacity-0 transition-opacity duration-100 group-hover:opacity-100 focus-visible:opacity-100`}
+            aria-label={`Folder menu: ${f.name}`}
+            onClick={(e) => {
+              const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+              setCtxMenu({ x: r.left, y: r.bottom + 4, target: { kind: 'folder', id: f.id } })
+            }}
+          >
+            …
+          </button>
+        )}
+      </li>
+    )
+  }
+  const addMenu = (
+    <div className="relative">
+      <button type="button" className={`${btn} px-1.5`} onClick={() => setAddMenuOpen((o) => !o)} aria-haspopup="menu" aria-expanded={addMenuOpen} aria-label="New page or folder">
+        + ▾
+      </button>
+      {addMenuOpen && (
+        <>
+          <div className="fixed inset-0 z-[98]" onClick={() => setAddMenuOpen(false)} />
+          <div role="menu" className="absolute right-0 top-full z-[99] mt-1 w-32 rounded-lg border border-neutral-300 bg-paper py-1 shadow-xl">
+            <button type="button" role="menuitem" className="w-full px-3 py-1.5 text-left font-mono text-[11px] text-ink hover:bg-black/[0.05]" onClick={() => { setAddMenuOpen(false); addPage() }}>New page</button>
+            <button type="button" role="menuitem" className="w-full px-3 py-1.5 text-left font-mono text-[11px] text-ink hover:bg-black/[0.05]" onClick={() => { setAddMenuOpen(false); addFolder() }}>New folder</button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+  const hoverThumbCard = hoverThumb && pagesVariant === 'tree' && (() => {
+    const pg = pages.find((x) => x.id === hoverThumb.id)
+    if (!pg || dragPage.current) return null
+    return (
+      <div className="pointer-events-none fixed z-[120] rounded border border-neutral-300 bg-paper p-1 shadow-xl" style={{ left: hoverThumb.x, top: Math.min(hoverThumb.y, window.innerHeight - 200) }} aria-hidden="true">
+        {pageThumb(pg, 120)}
+      </div>
+    )
+  })()
+  // Variant 1 — tree: list with collapsible folders, hover menu, thumbnail tooltip.
+  const pagesPanel = () => (
+    <section>
+      <div className="flex items-center justify-between" {...folderDrop(undefined)}>
+        <h2 className={`font-mono text-[10px] uppercase tracking-[0.18em] text-muted ${folderDropHint === '__unfiled' ? 'text-ink' : ''}`}>Pages</h2>
+        {addMenu}
+      </div>
+      <ul className="mt-1.5 space-y-0.5">
+        {pages.filter((pg) => !pg.folderId).map((pg) => pageRow(pg))}
+        {folders.map((f) => (
+          <Fragment key={f.id}>
+            {folderHeader(f)}
+            {!f.collapsed && pages.filter((pg) => pg.folderId === f.id).map((pg) => pageRow(pg, true))}
+          </Fragment>
+        ))}
+      </ul>
+      {hoverThumbCard}
+    </section>
+  )
+
+
   // ── Inspo ─────────────────────────────────────────────────────────────
   // Reads the page's signature and returns compositions that hold up
   // under the rules in src/inspo/rules.ts. Nothing is applied until a
@@ -13291,9 +13500,15 @@ function SumiEditor() {
     if (!c) return
     const pg = inspoPage(c)
     const els2 = (structuredClone(pg.els) as El[]).map((e, i) => ({ ...e, id: i + 1 }))
-    const slot: SaveSlot = { id: `${Date.now()}-${Math.floor(Math.random() * 1e6)}`, name: `Inspo ${c.seed} · ${c.archetype}`, savedAt: Date.now(), page: { ...pg, els: els2, name: undefined } }
-    persistSlots([slot, ...slots])
-    flash(`Saved "${slot.name}"`)
+    const now = Date.now()
+    const page: Page = { ...pg, els: els2, id: newPageId(), name: nextName(`${currentRecord.name} · variation`, pageNames()), folderId: currentRecord.folderId, createdAt: now, updatedAt: now }
+    setPages((arr) => {
+      const i = arr.findIndex((x) => x.id === currentId)
+      const next = [...arr]
+      next.splice(i + 1, 0, page)
+      return next
+    })
+    flash('Saved as new page')
   }
   // Keep = the one undo step. Step 0 (original) just ends the session.
   const navKeep = (idx = navIdx) => {
@@ -13362,26 +13577,11 @@ function SumiEditor() {
 
       {/* ── Preview mode — designs isolated on a pure backdrop ── */}
       {preview && (() => {
-        const pageDesigns = pages.map((p, i) => ({
-          key: `page-${i}`,
-          name: p.name ?? `Page ${i + 1}`,
-          page: loc.kind === 'page' && loc.idx === i ? currentPage() : p,
-        }))
         // A stale folder choice (folder deleted mid-session) falls back to all.
-        const folderFilter =
-          previewScope === 'saved' && (previewFolder === 'unfiled' || folders.some((f) => f.id === previewFolder))
-            ? previewFolder
-            : 'all'
-        const slotDesigns = (folderFilter === 'all'
-          ? slots
-          : slots.filter((s) => (folderFilter === 'unfiled' ? !s.folderId : s.folderId === folderFilter))
-        ).map((s) => ({
-          key: s.id,
-          name: s.name,
-          page: loc.kind === 'slot' && loc.id === s.id ? currentPage() : s.page,
-        }))
-        const designs =
-          previewScope === 'pages' ? pageDesigns : previewScope === 'saved' ? slotDesigns : [...pageDesigns, ...slotDesigns]
+        const folderFilter = previewFolder === 'unfiled' || folders.some((f) => f.id === previewFolder) ? previewFolder : 'all'
+        const designs = pages
+          .filter((pg) => (folderFilter === 'all' ? true : folderFilter === 'unfiled' ? !pg.folderId : pg.folderId === folderFilter))
+          .map((pg) => ({ key: pg.id, name: pg.name, page: livePage(pg) as PageState }))
         previewLenRef.current = Math.max(1, designs.length)
         const idx = designs.length ? ((previewIdx % designs.length) + designs.length) % designs.length : 0
         const d = designs[idx]
@@ -13390,12 +13590,6 @@ function SumiEditor() {
         const cycle = (dir: -1 | 1) => setPreviewIdx((i) => (i + dir + designs.length) % designs.length)
         // Switching scope keeps the current design when it exists in the new
         // scope; otherwise start at that scope's first design.
-        const switchScope = (s: 'all' | 'pages' | 'saved') => {
-          const next = s === 'pages' ? pageDesigns : s === 'saved' ? slotDesigns : [...pageDesigns, ...slotDesigns]
-          const j = d ? next.findIndex((x) => x.key === d.key) : -1
-          setPreviewScope(s)
-          setPreviewIdx(j >= 0 ? j : 0)
-        }
         // Caption ink flips with the backdrop so grid/list text stays legible.
         const [lr, lg, lb] = hexRgb01(previewBg)
         const darkBackdrop = 0.2126 * lr + 0.7152 * lg + 0.0722 * lb < 0.45
@@ -13422,7 +13616,7 @@ function SumiEditor() {
                   </div>
                 ) : (
                   <p className={`font-mono text-[12px] ${capMuted}`}>
-                    Nothing in {previewScope === 'saved' ? (folderFilter === 'all' ? 'Saved' : 'this folder') : 'Pages'} yet.
+                    Nothing here yet.
                   </p>
                 )}
               </div>
@@ -13496,7 +13690,7 @@ function SumiEditor() {
                 </div>
                 {designs.length === 0 && (
                   <p className={`pt-24 text-center font-mono text-[12px] ${capMuted}`}>
-                    Nothing in {previewScope === 'saved' ? (folderFilter === 'all' ? 'Saved' : 'this folder') : 'Pages'} yet.
+                    Nothing here yet.
                   </p>
                 )}
               </div>
@@ -13558,28 +13752,14 @@ function SumiEditor() {
                 </ul>
                 {designs.length === 0 && (
                   <p className={`pt-24 text-center font-mono text-[12px] ${capMuted}`}>
-                    Nothing in {previewScope === 'saved' ? (folderFilter === 'all' ? 'Saved' : 'this folder') : 'Pages'} yet.
+                    Nothing here yet.
                   </p>
                 )}
               </div>
             )}
             {/* Scope + view — top left */}
             <div className="absolute left-4 top-4 flex items-center gap-2">
-              <div className="flex items-center gap-0.5 rounded-full bg-ink/85 p-1 font-mono text-[11px] shadow-lg">
-                {(['all', 'pages', 'saved'] as const).map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => switchScope(s)}
-                    className={`rounded-full px-3 py-1 capitalize transition-colors duration-100 ${
-                      previewScope === s ? 'bg-white/20 text-white' : 'text-paper/60 hover:text-paper'
-                    }`}
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
-              {previewScope === 'saved' && folders.length > 0 && (
+              {folders.length > 0 && (
                 <div className="rounded-full bg-ink/85 p-1 font-mono text-[11px] shadow-lg">
                   <select
                     value={folderFilter}
@@ -13591,8 +13771,8 @@ function SumiEditor() {
                     }}
                     className="max-w-40 cursor-pointer appearance-none rounded-full bg-transparent px-3 py-1 text-paper focus:outline-none"
                   >
-                    <option value="all">All folders</option>
-                    {slots.some((s) => !s.folderId) && <option value="unfiled">Unfiled</option>}
+                    <option value="all">All pages</option>
+                    {pages.some((pg) => !pg.folderId) && <option value="unfiled">Unfiled</option>}
                     {folders.map((f) => (
                       <option key={f.id} value={f.id}>
                         {f.name}
@@ -13917,7 +14097,8 @@ function SumiEditor() {
           type="button"
           className={btn}
           onClick={() => {
-            setPreviewIdx(loc.kind === 'page' ? loc.idx : pages.length + Math.max(0, slots.findIndex((s) => s.id === loc.id)))
+            setPreviewFolder('all')
+            setPreviewIdx(Math.max(0, pages.findIndex((pg) => pg.id === currentId)))
             setPreview(true)
           }}
         >
@@ -14244,61 +14425,7 @@ function SumiEditor() {
         {/* ── Left pane: pages, layers, saved slots ── */}
         {!uiHidden && (
         <aside className="flex w-56 shrink-0 flex-col gap-5 overflow-y-auto border-r border-neutral-300 bg-paper p-3">
-          <section>
-            <div className="flex items-center justify-between">
-              <h2 className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">Pages</h2>
-              <button type="button" className={btn} onClick={addPage} title="New page" aria-label="New page">+</button>
-            </div>
-            <ul className="mt-1.5 space-y-0.5">
-              {pages.map((pg, i) => (
-                <li key={i} className="group flex items-center gap-1">
-                  {renamingPage === i ? (
-                    <input
-                      autoFocus
-                      defaultValue={pg.name ?? `Page ${i + 1}`}
-                      onFocus={(e) => e.target.select()}
-                      onBlur={(e) => renamePage(i, e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') renamePage(i, (e.target as HTMLInputElement).value)
-                        if (e.key === 'Escape') setRenamingPage(null)
-                      }}
-                      className="w-full rounded border border-neutral-300 bg-paper px-2 py-1 font-mono text-[11px] outline-none focus:border-ink"
-                    />
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => switchPage(i)}
-                      onDoubleClick={() => setRenamingPage(i)}
-                      onContextMenu={(e) => {
-                        e.preventDefault()
-                        setCtxMenu({ x: e.clientX, y: e.clientY, target: { kind: 'page', idx: i } })
-                      }}
-                      title="Click to open · double-click to rename · right-click to duplicate"
-                      className={`min-w-0 flex-1 truncate rounded px-2 py-1 text-left font-mono text-[11px] transition-colors duration-150 ${
-                        loc.kind === 'page' && i === loc.idx
-                          ? 'bg-black/[0.06] font-medium text-ink'
-                          : 'text-neutral-700 hover:bg-black/[0.04] hover:text-ink'
-                      }`}
-                    >
-                      {pg.name ?? `Page ${i + 1}`}
-                    </button>
-                  )}
-                  {renamingPage !== i && (
-                    <button
-                      type="button"
-                      className={`${btn} shrink-0 opacity-0 transition-opacity duration-100 group-hover:opacity-100`}
-                      title="Delete page"
-                      aria-label="Delete page"
-                      onClick={() => deletePage(i)}
-                    >
-                      ×
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </section>
-
+          {pagesPanel()}
           <section className="min-h-0">
             <h2 className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">Layers</h2>
             {/* Top of the list = front of the canvas, like desktop tools.
@@ -14415,153 +14542,6 @@ function SumiEditor() {
             </ul>
           </section>
 
-          <section>
-            <div className="flex items-center justify-between">
-              <h2 className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">Saved</h2>
-              <button type="button" className={btn} onClick={addFolder} title="New folder" aria-label="New folder">
-                + Folder
-              </button>
-            </div>
-            <button
-              type="button"
-              onClick={saveSlot}
-              disabled={loc.kind !== 'page'}
-              title={loc.kind === 'page' ? 'Move the current page into Saved' : 'This page is already in Saved'}
-              className="mt-1.5 w-full rounded border border-dashed border-neutral-300 px-2 py-1.5 font-mono text-[11px] text-muted transition-colors duration-150 hover:border-neutral-500 hover:text-ink disabled:pointer-events-none disabled:opacity-40"
-            >
-              + Save this page
-            </button>
-            {(() => {
-              const renderSlotRow = (s: SaveSlot) => (
-                <li
-                  key={s.id}
-                  draggable={renamingSlot !== s.id}
-                  onDragStart={() => { dragSlot.current = s.id }}
-                  onDragOver={(ev) => {
-                    ev.preventDefault()
-                    const r = ev.currentTarget.getBoundingClientRect()
-                    const below = ev.clientY > r.top + r.height / 2
-                    setSlotDropHint((h) => (h?.id === s.id && h.below === below ? h : { id: s.id, below }))
-                  }}
-                  onDragLeave={() => setSlotDropHint((h) => (h?.id === s.id ? null : h))}
-                  onDrop={(ev) => {
-                    ev.preventDefault()
-                    const r = ev.currentTarget.getBoundingClientRect()
-                    dropSlot(s.id, ev.clientY > r.top + r.height / 2)
-                  }}
-                  onDragEnd={() => { dragSlot.current = null; setSlotDropHint(null); setFolderHint(null) }}
-                  className={`group flex items-center gap-1 border-y-2 border-transparent ${
-                    slotDropHint?.id === s.id ? (slotDropHint.below ? 'border-b-red' : 'border-t-red') : ''
-                  }`}
-                >
-                  {renamingSlot === s.id ? (
-                    <input
-                      autoFocus
-                      defaultValue={s.name}
-                      onBlur={(e) => renameSlot(s.id, e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') renameSlot(s.id, (e.target as HTMLInputElement).value)
-                        if (e.key === 'Escape') setRenamingSlot(null)
-                      }}
-                      className="min-w-0 flex-1 rounded border border-neutral-300 bg-paper px-2 py-1 font-mono text-[11px] outline-none focus:border-ink"
-                    />
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => loadSlot(s)}
-                      onDoubleClick={() => setRenamingSlot(s.id)}
-                      onContextMenu={(e) => {
-                        e.preventDefault()
-                        setCtxMenu({ x: e.clientX, y: e.clientY, target: { kind: 'slot', id: s.id } })
-                      }}
-                      title="Click to open · double-click to rename · right-click to duplicate · drag onto a folder to file it"
-                      className={`min-w-0 flex-1 rounded px-2 py-1 text-left transition-colors duration-150 hover:bg-black/[0.04] ${
-                        loc.kind === 'slot' && loc.id === s.id ? 'bg-black/[0.06]' : ''
-                      }`}
-                    >
-                      <span className="block truncate font-mono text-[11px] text-ink">{s.name}</span>
-                      <span className="block font-mono text-[9px] text-muted">
-                        {fmtWhen(s.savedAt)} · {s.page.els.length} elements
-                      </span>
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className={`${btn} shrink-0 opacity-0 transition-opacity duration-100 group-hover:opacity-100`}
-                    title="Delete save"
-                    aria-label="Delete save"
-                    onClick={() => deleteSlot(s.id)}
-                  >
-                    ×
-                  </button>
-                </li>
-              )
-              const orphaned = slots.filter((s) => !s.folderId || !folders.some((f) => f.id === s.folderId))
-              return (
-                <ul className="mt-1.5">
-                  {folders.map((f) => {
-                    const inFolder = slots.filter((s) => s.folderId === f.id)
-                    return (
-                      <li key={f.id}>
-                        <div
-                          onDragOver={(ev) => {
-                            if (dragSlot.current == null) return
-                            ev.preventDefault()
-                            setFolderHint(f.id)
-                          }}
-                          onDragLeave={() => setFolderHint((h) => (h === f.id ? null : h))}
-                          onDrop={(ev) => {
-                            ev.preventDefault()
-                            dropSlotToFolder(f.id)
-                          }}
-                          className={`group flex items-center gap-1 rounded ${folderHint === f.id ? 'bg-red/10 outline outline-1 outline-red' : ''}`}
-                        >
-                          {renamingFolder === f.id ? (
-                            <input
-                              autoFocus
-                              defaultValue={f.name}
-                              onFocus={(e) => e.target.select()}
-                              onBlur={(e) => renameFolder(f.id, e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') renameFolder(f.id, (e.target as HTMLInputElement).value)
-                                if (e.key === 'Escape') setRenamingFolder(null)
-                              }}
-                              className="min-w-0 flex-1 rounded border border-neutral-300 bg-paper px-2 py-1 font-mono text-[11px] outline-none focus:border-ink"
-                            />
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => persistFolders(folders.map((x) => (x.id === f.id ? { ...x, collapsed: !x.collapsed } : x)))}
-                              onDoubleClick={() => setRenamingFolder(f.id)}
-                              title="Click to open/close · double-click to rename · drop a save here to file it"
-                              className="flex min-w-0 flex-1 items-center gap-1.5 rounded px-2 py-1 text-left font-mono text-[11px] text-neutral-700 transition-colors duration-150 hover:bg-black/[0.04] hover:text-ink"
-                            >
-                              <span className="shrink-0 text-[9px]" aria-hidden="true">{f.collapsed ? '▸' : '▾'}</span>
-                              <span className="min-w-0 flex-1 truncate">{f.name}</span>
-                              <span className="shrink-0 text-[9px] text-muted">{inFolder.length}</span>
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            className={`${btn} shrink-0 opacity-0 transition-opacity duration-100 group-hover:opacity-100`}
-                            title="Delete folder (saves move back to the top level)"
-                            aria-label="Delete folder"
-                            onClick={() => deleteFolder(f.id)}
-                          >
-                            ×
-                          </button>
-                        </div>
-                        {!f.collapsed && inFolder.length > 0 && (
-                          <ul className="ml-2 border-l border-neutral-200 pl-1">{inFolder.map(renderSlotRow)}</ul>
-                        )}
-                      </li>
-                    )
-                  })}
-                  {orphaned.map(renderSlotRow)}
-                </ul>
-              )
-            })()}
-          </section>
         </aside>
         )}
 
@@ -16462,16 +16442,54 @@ function SumiEditor() {
             className="fixed z-[99] w-36 rounded-lg border border-neutral-300 bg-paper py-1 shadow-xl"
             style={{ left: Math.min(ctxMenu.x, window.innerWidth - 152), top: Math.min(ctxMenu.y, window.innerHeight - 44) }}
           >
-            <button
-              type="button"
-              onClick={duplicateFromMenu}
-              className="w-full px-3 py-1.5 text-left font-mono text-[11px] text-ink transition-colors duration-100 hover:bg-black/[0.05]"
-            >
-              Duplicate
-            </button>
+            {(() => {
+              const item = 'w-full px-3 py-1.5 text-left font-mono text-[11px] text-ink transition-colors duration-100 hover:bg-black/[0.05]'
+              const t = ctxMenu.target
+              const close = () => setCtxMenu(null)
+              if (t.kind === 'folder')
+                return (
+                  <>
+                    <button type="button" className={item} onClick={() => { close(); setRenamingFolder(t.id) }}>Rename</button>
+                    <button type="button" className={item} onClick={() => { close(); addPage(t.id) }}>New page here</button>
+                    <button type="button" className={`${item} text-red`} onClick={() => { close(); setFolderDialog(t.id) }}>Delete…</button>
+                  </>
+                )
+              const pg = pages.find((x) => x.id === t.id)
+              return (
+                <>
+                  <button type="button" className={item} onClick={() => { close(); setRenamingPage(t.id) }}>Rename</button>
+                  <button type="button" className={item} onClick={duplicateFromMenu}>Duplicate</button>
+                  {(folders.length > 0 || pg?.folderId) && <p className="px-3 pb-0.5 pt-1.5 font-mono text-[9px] uppercase tracking-[0.18em] text-muted">Move to</p>}
+                  {pg?.folderId && <button type="button" className={item} onClick={() => { close(); movePage(t.id, undefined) }}>No folder</button>}
+                  {folders.filter((f) => f.id !== pg?.folderId).map((f) => (
+                    <button key={f.id} type="button" className={`${item} truncate`} onClick={() => { close(); movePage(t.id, f.id) }}>{f.name}</button>
+                  ))}
+                  <button type="button" className={`${item} text-red`} onClick={() => { close(); deletePage(t.id) }}>Delete</button>
+                </>
+              )
+            })()}
           </div>
         </>
       )}
+      {/* Delete folder? — move its pages out, or delete them with it. */}
+      {folderDialog && (() => {
+        const f = folders.find((x) => x.id === folderDialog)
+        const n = pages.filter((pg) => pg.folderId === folderDialog).length
+        if (!f) return null
+        return (
+          <div className="fixed inset-0 z-[140] flex items-center justify-center bg-black/30 p-6" onClick={() => setFolderDialog(null)} role="presentation">
+            <div role="dialog" aria-modal="true" aria-label="Delete folder" onClick={(e) => e.stopPropagation()} className="w-[360px] rounded-lg border border-neutral-300 bg-paper p-4 shadow-2xl">
+              <p className="font-mono text-[12px] text-ink">Delete folder “{f.name}”?</p>
+              <p className="mt-1 text-[11px] leading-4 text-neutral-800">It holds {n} page{n === 1 ? '' : 's'}. Both choices can be undone from the toast.</p>
+              <div className="mt-3 flex justify-end gap-1.5">
+                <button type="button" className={btn} onClick={() => setFolderDialog(null)}>Cancel</button>
+                <button type="button" className={btn} onClick={() => deleteFolder(f.id, 'move')}>Move pages out</button>
+                <button type="button" className={`${btn} border-red text-red`} onClick={() => deleteFolder(f.id, 'delete')}>Delete with pages</button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
         </>
       )}
     </div>
