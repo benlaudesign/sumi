@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { FEATURES } from '../src/config/features'
 
 // ── Canvas ────────────────────────────────────────────────────────────────
 
@@ -6925,6 +6926,7 @@ function PreviewCanvas({ page, ns = '' }: { page: PageState; ns?: string }) {
 // single-behavior field or a sequenced chain. Used to decide whether a
 // preview card gets a play control at all.
 function pageHasMotion(page: PageState): boolean {
+  if (!FEATURES.motion) return false // flag off: saved motion data is ignored, never played
   return page.els.some((e) => {
     const m = (e.v as { anim?: AnimV }).anim
     if (!m) return false
@@ -10156,6 +10158,7 @@ export default function Sumi() {
 
     let next: El[] = structuredClone(els)
     const add = (type: ElType, patch: Patch) => {
+      if (type === 'subject' && !FEATURES.subject) return // flag off: never generate subjects
       if (next.length < LAYER_CAP) next.push(mk(type, patch))
     }
     const patchEl = (el: El, patch: Patch) => {
@@ -12469,7 +12472,7 @@ export default function Sumi() {
   // Space play/pause — only when the composition actually has motion.
   const toggleTlRef = useRef<() => boolean>(() => false)
   toggleTlRef.current = () => {
-    if (tlDuration <= 0) return false
+    if (!FEATURES.motion || tlDuration <= 0) return false
     if (!tlPlaying && tRef.current >= tlDuration - 0.01) scrubTo(0)
     setTlPlaying((pl) => !pl)
     return true
@@ -12577,7 +12580,7 @@ export default function Sumi() {
       }
       // Bare letters add elements: s/d/t/m spawn, i opens the image picker.
       if (!meta && !e.altKey && !e.shiftKey) {
-        const addType = (Object.keys(EL_KEY) as ElType[]).find((k) => EL_KEY[k] === e.key)
+        const addType = (Object.keys(EL_KEY) as ElType[]).find((k) => EL_KEY[k] === e.key && (k !== 'subject' || FEATURES.subject))
         if (addType) {
           e.preventDefault()
           if (addType === 'image') fileInputRef.current?.click()
@@ -13283,7 +13286,7 @@ export default function Sumi() {
         </span>
 
         <div className="flex items-center gap-1" role="group" aria-label="Add element">
-          {(['shape', 'halftone', 'text', 'texture', 'ascii', 'subject'] as const).map((t) => (
+          {(['shape', 'halftone', 'text', 'texture', 'ascii', 'subject'] as const).filter((t) => t !== 'subject' || FEATURES.subject).map((t) => (
             <button
               key={t}
               type="button"
@@ -13341,14 +13344,16 @@ export default function Sumi() {
 
         <div className="min-w-0 flex-1" />
 
-        <button
-          type="button"
-          className={`${btn} ${motionOpen ? 'border-neutral-600 bg-black/[0.05]' : ''}`}
-          onClick={() => setMotionOpen((o) => !o)}
-          title="Motion timeline — choreograph layer animations"
-        >
-          ◷ Motion
-        </button>
+        {FEATURES.motion && (
+          <button
+            type="button"
+            className={`${btn} ${motionOpen ? 'border-neutral-600 bg-black/[0.05]' : ''}`}
+            onClick={() => setMotionOpen((o) => !o)}
+            title="Motion timeline — choreograph layer animations"
+          >
+            ◷ Motion
+          </button>
+        )}
 
         <button type="button" className={btn} onClick={randomize} title="Shuffle positions, sizes and colors">Shuffle</button>
         <button type="button" className={btn} onClick={randomizeElements} title="Reroll element types, styles and palette">
@@ -13443,7 +13448,7 @@ export default function Sumi() {
                       { key: 'video', label: 'Video' },
                       { key: 'svg', label: 'SVG' },
                     ] as const
-                  ).map((t) => (
+                  ).filter((t) => t.key !== 'video' || FEATURES.motion).map((t) => (
                     <button
                       key={t.key}
                       type="button"
@@ -13523,7 +13528,7 @@ export default function Sumi() {
                   </div>
                 )}
 
-                {exportTab === 'video' && (
+                {exportTab === 'video' && FEATURES.motion && (
                   <div className="pt-3">
                     <div className="mb-1.5 font-mono text-[9px] uppercase tracking-[0.16em] text-neutral-600">Format</div>
                     <div className="flex gap-1.5">
@@ -14420,7 +14425,7 @@ export default function Sumi() {
         </main>
 
         {/* ── Motion timeline — scrub, transport, per-layer bars ── */}
-        {motionOpen && (
+        {FEATURES.motion && motionOpen && (
           <div className="relative flex shrink-0 flex-col border-t border-neutral-300 bg-paper px-3 py-2" style={{ height: tlPanelHeight }}>
             <div
               onPointerDown={startTlPanelResize}
@@ -14702,7 +14707,9 @@ export default function Sumi() {
                 <AlignRow onAlign={alignSelected} onDistribute={distributeSelected} distributeEnabled={false} />
               </Section>
 
-              {/* Design | Motion — thinking order, not build order */}
+              {/* Design | Motion — thinking order, not build order.
+                  FEATURES.motion off: no tab chrome at all, Design only. */}
+              {FEATURES.motion && (
               <div className="mb-2 flex rounded-md border border-white/15 p-0.5 font-mono text-[10px]">
                 {(['design', 'motion'] as const).map((tb) => {
                   const hasMotion = normalizeMotion((selected.v as { anim?: AnimV }).anim?.type ?? 'none') !== 'none'
@@ -14730,8 +14737,9 @@ export default function Sumi() {
                   )
                 })}
               </div>
+              )}
 
-              {inspTab === 'motion' && (
+              {FEATURES.motion && inspTab === 'motion' && (
                 <MotionTab
                   anim={(selected.v as { anim: AnimV }).anim}
                   up={up}
@@ -14740,7 +14748,7 @@ export default function Sumi() {
                 />
               )}
 
-              {inspTab === 'design' && (
+              {(!FEATURES.motion || inspTab === 'design') && (
               <>
               {Object.keys(PRESETS[selected.type]).length > 0 && (
                 <div className="mb-2">
