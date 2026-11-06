@@ -12650,8 +12650,9 @@ function SumiEditor() {
           nv.cancel()
           return
         }
-        // N loads more (R stays the Inspo toggle, so it closes the session).
-        if (e.code === 'KeyN' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+        // M loads more while a session is open (outside one, M adds a
+        // Material as usual); R stays the Inspo toggle, so it closes.
+        if (e.code === 'KeyM' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
           e.preventDefault()
           nv.more()
           return
@@ -15079,7 +15080,7 @@ function SumiEditor() {
               <div className="flex shrink-0 flex-col justify-between gap-2 self-stretch pr-3" style={{ borderRight: '1px solid var(--color-neutral-300)' }} role="group" aria-label="Inspo controls">
                 <div className="flex items-center gap-1.5">
                   <button type="button" className={`${btn} py-0.5`} onClick={inspoMore} disabled={inspoBusy} title={`Next batch (seed ${inspoSeed} → ${(inspoSeed + 1) % 100000})`}>
-                    More<Kbd>n</Kbd>
+                    More<Kbd>m</Kbd>
                   </button>
                   <button type="button" className={`${btn} px-1.5 py-0.5`} onClick={navCancel} aria-label="Close Inspo (Esc)">×</button>
                 </div>
@@ -16381,7 +16382,7 @@ function SumiEditor() {
       {inspoOpen && navVariant !== 'tray' && navVariant !== 'filmstrip' && (
         <div className="fixed left-1/2 top-[50px] z-[126] flex -translate-x-1/2 items-center gap-2 rounded-full border border-neutral-300 bg-paper px-2 py-1 font-mono text-[10.5px] shadow-xl" role="group" aria-label="Inspo controls">
           <button type="button" className={`${btn} py-0.5`} onClick={inspoMore} disabled={inspoBusy} title={inspoResult ? `seed ${inspoResult.batchSeed} · ${inspoResult.passing.length}/${inspoResult.tries} (dev)` : undefined}>
-            More<Kbd>n</Kbd>
+            More<Kbd>m</Kbd>
           </button>
           <button type="button" className={`${btn} px-1.5 py-0.5`} onClick={navCancel} aria-label="Close Inspo">×</button>
         </div>
