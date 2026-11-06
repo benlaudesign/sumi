@@ -9001,6 +9001,122 @@ const getWide = () => wideQuery().matches
 const getWideServer = () => false
 const GATE_CSS = `@media (min-width: ${MIN_EDITOR_WIDTH}px) { .pg-gate-notice { display: none } }`
 
+// Floating character toolbar: B · text colour (A + bar) · highlight (pen +
+// bar) · Emphasis ▾ (current value muted) · divider · ✕. Measures itself
+// so it always sits ≥ 12px beside the selection and never over it; flips
+// to the left when the right side would run past the artboard.
+function CharToolbar({
+  box, artRight, bold, color, bg, emphasis, emphasisOk, pop, setPop, onBold, onColor, onBg, onEmphasis, onClear,
+}: {
+  box: { x1: number; x2: number; y1: number; y2: number }
+  artRight: number
+  bold: boolean
+  color: string
+  bg: string | null
+  emphasis: string
+  emphasisOk: boolean
+  pop: 'color' | 'bg' | 'emphasis' | null
+  setPop: (p: 'color' | 'bg' | 'emphasis' | null) => void
+  onBold: () => void
+  onColor: (hex: string) => void
+  onBg: (hex: string) => void
+  onEmphasis: (k: 'none' | 'underline' | 'highlight') => void
+  onClear: () => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [size, setSize] = useState({ w: 280, h: 36 })
+  useLayoutEffect(() => {
+    const n = ref.current
+    if (!n) return
+    const read = () => {
+      const r = n.getBoundingClientRect()
+      setSize((prev) => (Math.abs(r.width - prev.w) > 0.5 || Math.abs(r.height - prev.h) > 0.5 ? { w: r.width, h: r.height } : prev))
+    }
+    read()
+    const ro = new ResizeObserver(read)
+    ro.observe(n)
+    return () => ro.disconnect()
+  }, [])
+  const GAP = 14
+  const flip = box.x2 + GAP + size.w > artRight
+  const left = flip ? Math.max(8, box.x1 - GAP - size.w) : box.x2 + GAP
+  const top = Math.max(8, Math.min(window.innerHeight - size.h - 8, (box.y1 + box.y2) / 2 - size.h / 2))
+  const btn = 'flex h-7 items-center gap-1 rounded-full px-2 font-mono text-[11px] text-white/85 transition-colors duration-100 hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-white/50'
+  const bar = (c: string | null) => (
+    <span className="mt-[2px] h-[3px] w-4 rounded-[1px]" style={c ? { backgroundColor: c } : { border: '1px solid rgba(255,255,255,0.5)' }} aria-hidden="true" />
+  )
+  const swatches = (prop: 'color' | 'bg') => (
+    <div className="absolute left-0 top-full mt-1.5 flex items-center gap-1.5 rounded-full border border-white/15 bg-[#212121] px-2.5 py-2 shadow-2xl" role="group" aria-label={prop === 'color' ? 'Glyph colour' : 'Glyph highlight'}>
+      {GUIDE_COLORS.map((c) => (
+        <button
+          key={c.hex}
+          type="button"
+          aria-label={c.name}
+          title={c.name}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => (prop === 'color' ? onColor(c.hex) : onBg(c.hex))}
+          className={`h-4 w-4 shrink-0 rounded-full border transition-transform duration-100 hover:scale-110 ${(prop === 'color' ? color : bg) === c.hex ? 'border-white ring-1 ring-white/60' : 'border-white/25'}`}
+          style={{ backgroundColor: c.hex }}
+        />
+      ))}
+      <label className="ml-1 flex items-center gap-1 font-mono text-[10px] text-white/60" title="Custom">
+        <input type="color" aria-label="Custom colour" defaultValue={(prop === 'color' ? color : bg) ?? '#bc002d'} onChange={(e) => (prop === 'color' ? onColor(e.target.value) : onBg(e.target.value))} className="h-4 w-5 cursor-pointer rounded border border-white/15 bg-transparent" />
+        custom
+      </label>
+    </div>
+  )
+  return (
+    <div
+      ref={ref}
+      data-char-toolbar
+      role="toolbar"
+      aria-label="Character styling"
+      className="fixed z-[96] flex items-center gap-0.5 whitespace-nowrap rounded-full border border-white/15 bg-[#212121] px-1.5 py-1 shadow-2xl"
+      style={{ left, top }}
+    >
+      <button type="button" title="Bold" aria-label="Bold" aria-pressed={bold} onMouseDown={(e) => e.preventDefault()} onClick={onBold} className={`${btn} w-7 justify-center font-bold ${bold ? 'bg-white/15 text-white' : ''}`}>
+        B
+      </button>
+      <div className="relative">
+        <button type="button" title="Text colour" aria-label="Text colour" aria-expanded={pop === 'color'} onMouseDown={(e) => e.preventDefault()} onClick={() => setPop(pop === 'color' ? null : 'color')} className={`${btn} w-8 flex-col justify-center gap-0 leading-none`}>
+          <span className="text-[13px] font-semibold leading-none">A</span>
+          {bar(color)}
+        </button>
+        {pop === 'color' && swatches('color')}
+      </div>
+      <div className="relative">
+        <button type="button" title="Highlight" aria-label="Highlight" aria-expanded={pop === 'bg'} onMouseDown={(e) => e.preventDefault()} onClick={() => setPop(pop === 'bg' ? null : 'bg')} className={`${btn} w-8 flex-col justify-center gap-0 leading-none`}>
+          <svg width="14" height="13" viewBox="0 0 14 13" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" strokeLinecap="round">
+            <path d="M8.2 1.5 12.5 5.8 6.3 12H3.5L2 10.5V7.7Z" />
+            <path d="M6.6 3.1l4.3 4.3" />
+          </svg>
+          {bar(bg)}
+        </button>
+        {pop === 'bg' && swatches('bg')}
+      </div>
+      <div className="relative">
+        <button type="button" title={emphasisOk ? 'Emphasis — animated underline or wash' : 'Emphasis draws on horizontal, single-run text only'} aria-label="Emphasis" aria-expanded={pop === 'emphasis'} onMouseDown={(e) => e.preventDefault()} onClick={() => setPop(pop === 'emphasis' ? null : 'emphasis')} className={btn}>
+          Emphasis <span className="text-white/45">{emphasis === 'highlight' ? 'wash' : emphasis}</span> <span aria-hidden="true" className="text-white/45">▾</span>
+        </button>
+        {pop === 'emphasis' && (
+          <div className="absolute left-0 top-full mt-1.5 flex flex-col rounded-lg border border-white/15 bg-[#212121] p-1 shadow-2xl" role="menu" aria-label="Emphasis">
+            {([['none', 'None'], ['underline', 'Underline'], ['highlight', 'Wash']] as const).map(([k, label]) => (
+              <button key={k} type="button" role="menuitemradio" aria-checked={emphasis === k} onMouseDown={(e) => e.preventDefault()} onClick={() => { onEmphasis(k); setPop(null) }} className={`rounded px-2.5 py-1 text-left font-mono text-[11px] transition-colors duration-100 hover:bg-white/10 ${emphasis === k ? 'text-white' : 'text-white/70'}`}>
+                {label}
+              </button>
+            ))}
+            {!emphasisOk && <span className="max-w-[180px] px-2.5 pb-1 pt-0.5 text-[10px] leading-4 text-white/40">Stored now; draws once this text is horizontal.</span>}
+          </div>
+        )}
+      </div>
+      <span className="mx-1 h-4 w-px shrink-0 bg-white/20" aria-hidden="true" />
+      <button type="button" title="Clear styling" aria-label="Clear styling" onMouseDown={(e) => e.preventDefault()} onClick={onClear} className={`${btn} w-7 justify-center`}>
+        ✕
+      </button>
+    </div>
+  )
+}
+
 function DesktopOnlyNotice() {
   return (
     <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center gap-5 bg-paper px-6 text-center font-mono text-ink">
@@ -9344,7 +9460,8 @@ function SumiEditor() {
   const [charPop, setCharPop] = useState<'color' | 'bg' | 'emphasis' | null>(null)
   // Per-glyph geometry: polygon in artboard units (for the overlay) and the
   // screen box (for the toolbar's placement).
-  const [charGlyphs, setCharGlyphs] = useState<{ i: number; pts: string; sx: number; sy: number; sw: number; sh: number }[]>([])
+  const [charGlyphs, setCharGlyphs] = useState<{ i: number; pts: string; sx: number; sy: number; sw: number; sh: number; lx: number; ly: number; lw: number; lh: number }[]>([])
+  const [charTransform, setCharTransform] = useState('')
   const charAnchor = useRef<number | null>(null)
   const charDragging = useRef(false)
   // Preview mode — isolate designs on a pure backdrop; ←/→ cycles, Esc exits.
@@ -13598,8 +13715,9 @@ function SumiEditor() {
       const ys = sp.map((q) => q[1])
       const sx = Math.min(...xs)
       const sy = Math.min(...ys)
-      out.push({ i, pts: vp.map((q) => `${r2(q[0])},${r2(q[1])}`).join(' '), sx, sy, sw: Math.max(...xs) - sx, sh: Math.max(...ys) - sy })
+      out.push({ i, pts: vp.map((q) => `${r2(q[0])},${r2(q[1])}`).join(' '), sx, sy, sw: Math.max(...xs) - sx, sh: Math.max(...ys) - sy, lx: r.x, ly: r.y, lw: r.width, lh: r.height })
     }
+    setCharTransform(t.getAttribute('transform') ?? '')
     setCharGlyphs((prev) => (JSON.stringify(prev) === JSON.stringify(out) ? prev : out))
   }, [charMode, els])
   useLayoutEffect(() => {
@@ -14728,13 +14846,49 @@ function SumiEditor() {
                 )
               // data-locked + the globals.css rule beat the explicit
               // pointerEvents:'all' hit rects inside the renderers.
-              return e.locked ? (
+              // Character mode: one continuous tint per column/line of the
+              // selected range, under the glyphs so applied colours stay
+              // visible, plus a 2px accent bar on the outer edge.
+              const tint = e.id === charMode && charSel && charGlyphs.length ? (() => {
+                const vert = !!(e.v as TextV).vertical
+                const sel = charGlyphs.filter((g) => g.i >= charSel.start && g.i < charSel.end)
+                const runs: { x: number; y: number; w: number; h: number }[] = []
+                for (const g of sel) {
+                  const key = vert ? g.lx + g.lw / 2 : g.ly + g.lh / 2
+                  const run = runs.find((r) => (vert ? Math.abs(r.x + r.w / 2 - key) < g.lw * 0.6 : Math.abs(r.y + r.h / 2 - key) < g.lh * 0.6))
+                  if (!run) runs.push({ x: g.lx, y: g.ly, w: g.lw, h: g.lh })
+                  else {
+                    const x2 = Math.max(run.x + run.w, g.lx + g.lw)
+                    const y2 = Math.max(run.y + run.h, g.ly + g.lh)
+                    run.x = Math.min(run.x, g.lx)
+                    run.y = Math.min(run.y, g.ly)
+                    run.w = x2 - run.x
+                    run.h = y2 - run.y
+                  }
+                }
+                return (
+                  <g key={`tint-${e.id}`} data-ui transform={charTransform || undefined} style={{ pointerEvents: 'none' }}>
+                    {runs.map((r, k) => (
+                      <Fragment key={k}>
+                        <rect x={r2(r.x)} y={r2(r.y)} width={r2(r.w)} height={r2(r.h)} rx={3} fill={palette.accent} fillOpacity={0.12} />
+                        {vert ? (
+                          <line x1={r2(r.x + r.w)} y1={r2(r.y)} x2={r2(r.x + r.w)} y2={r2(r.y + r.h)} stroke={palette.accent} strokeWidth={2} vectorEffect="non-scaling-stroke" />
+                        ) : (
+                          <line x1={r2(r.x)} y1={r2(r.y)} x2={r2(r.x + r.w)} y2={r2(r.y)} stroke={palette.accent} strokeWidth={2} vectorEffect="non-scaling-stroke" />
+                        )}
+                      </Fragment>
+                    ))}
+                  </g>
+                )
+              })() : null
+              const wrapped = e.locked ? (
                 <g key={e.id} data-locked style={{ pointerEvents: 'none' }}>
                   {node}
                 </g>
               ) : (
                 node
               )
+              return tint ? [tint, wrapped] : wrapped
             })}
             {/* Crop mode — Image or Ascii(image source). A dimmed "ghost" of
                 the full enlarged image shows what's cropped out; the crop
@@ -14945,26 +15099,23 @@ function SumiEditor() {
                 hover, a tint on the selected run. */}
             {charMode !== null && (
               <g style={{ pointerEvents: 'all' }}>
-                {charGlyphs.map((g) => {
-                  const on = !!charSel && g.i >= charSel.start && g.i < charSel.end
-                  return (
+                {charGlyphs.map((g) => (
                     <polygon
                       key={g.i}
                       data-glyph={g.i}
                       points={g.pts}
-                      fill={on ? 'var(--color-ink)' : 'transparent'}
-                      fillOpacity={on ? 0.14 : 0}
-                      stroke={charHover === g.i || on ? 'var(--color-ink)' : 'none'}
-                      strokeOpacity={on ? 0.5 : 0.35}
+                      fill="transparent"
+                      stroke={charHover === g.i ? 'var(--color-ink)' : 'none'}
+                      strokeOpacity={0.35}
                       strokeWidth={1}
+                      strokeDasharray="1 2"
                       vectorEffect="non-scaling-stroke"
                       style={{ cursor: 'text' }}
                       onPointerEnter={() => setCharHover(g.i)}
                       onPointerLeave={() => setCharHover((h) => (h === g.i ? null : h))}
                       onPointerDown={(e) => glyphDown(e, g.i)}
                     />
-                  )
-                })}
+                ))}
               </g>
             )}
             {selBoxes.map((selBox) => (() => {
@@ -15149,85 +15300,24 @@ function SumiEditor() {
           {charMode !== null && activeSel && tv && canvasRect && (() => {
             const sel = charGlyphs.filter((g) => g.i >= activeSel.start && g.i < activeSel.end)
             if (!sel.length) return null
-            const x1 = Math.min(...sel.map((g) => g.sx))
-            const x2 = Math.max(...sel.map((g) => g.sx + g.sw))
-            const y1 = Math.min(...sel.map((g) => g.sy))
-            const y2 = Math.max(...sel.map((g) => g.sy + g.sh))
-            const TB_W = 300
-            const TB_H = 36
-            const gap = 14
-            const flip = x2 + gap + TB_W > canvasRect.left + canvasRect.width
-            const left = flip ? Math.max(8, x1 - gap - TB_W) : x2 + gap
-            const top = Math.max(8, Math.min(window.innerHeight - TB_H - 8, (y1 + y2) / 2 - TB_H / 2))
-            const colorNow = selCommon('color') ?? tv.color
-            const bgNow = selCommon('bg')
             const emphasisNow = tv.emphasis && tv.emphasis.end > activeSel.start && tv.emphasis.start < activeSel.end ? tv.emphasis.treatment : 'none'
-            const emphasisOk = !tv.vertical && (tv.repeatLines ?? 1) <= 1
-            const tbBtn = 'flex h-7 items-center gap-1.5 rounded-full px-2.5 font-mono text-[11px] text-white/80 transition-colors duration-100 hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-white/50'
-            const dot = (c: string | null) => (
-              <span className="h-3 w-3 shrink-0 rounded-full border border-white/40" style={{ backgroundColor: c ?? 'transparent' }} aria-hidden="true" />
-            )
-            const swatches = (prop: 'color' | 'bg') => (
-              <div className="absolute left-0 top-full mt-1.5 flex items-center gap-1.5 rounded-full border border-white/15 bg-[#212121] px-2.5 py-2 shadow-2xl" role="group" aria-label={prop === 'color' ? 'Glyph colour' : 'Glyph highlight'}>
-                {GUIDE_COLORS.map((c) => (
-                  <button
-                    key={c.hex}
-                    type="button"
-                    aria-label={`${c.name}`}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => applyRange({ [prop]: c.hex })}
-                    className={`h-4 w-4 shrink-0 rounded-full border transition-transform duration-100 hover:scale-110 ${(prop === 'color' ? colorNow : bgNow) === c.hex ? 'border-white ring-1 ring-white/60' : 'border-white/25'}`}
-                    style={{ backgroundColor: c.hex }}
-                  />
-                ))}
-                <label className="ml-1 flex items-center gap-1 font-mono text-[10px] text-white/60" title="Custom">
-                  <input type="color" aria-label="Custom colour" defaultValue={(prop === 'color' ? colorNow : bgNow) ?? '#bc002d'} onChange={(e) => applyRange({ [prop]: e.target.value })} className="h-4 w-5 cursor-pointer rounded border border-white/15 bg-transparent" />
-                  custom
-                </label>
-              </div>
-            )
             return createPortal(
-              <div
-                data-char-toolbar
-                role="toolbar"
-                aria-label="Character styling"
-                className="fixed z-[96] flex items-center gap-0.5 rounded-full border border-white/15 bg-[#212121] px-1.5 py-1 shadow-2xl"
-                style={{ left, top, width: TB_W, height: TB_H }}
-              >
-                <button type="button" title="Bold" aria-pressed={selAllBold} onMouseDown={(e) => e.preventDefault()} onClick={() => applyRange({ bold: !selAllBold })} className={`${tbBtn} px-2.5 font-bold ${selAllBold ? 'bg-white/15 text-white' : ''}`}>
-                  B
-                </button>
-                <div className="relative">
-                  <button type="button" title="Colour" aria-expanded={charPop === 'color'} onMouseDown={(e) => e.preventDefault()} onClick={() => setCharPop((o) => (o === 'color' ? null : 'color'))} className={tbBtn}>
-                    Colour {dot(colorNow)}
-                  </button>
-                  {charPop === 'color' && swatches('color')}
-                </div>
-                <div className="relative">
-                  <button type="button" title="Highlight" aria-expanded={charPop === 'bg'} onMouseDown={(e) => e.preventDefault()} onClick={() => setCharPop((o) => (o === 'bg' ? null : 'bg'))} className={tbBtn}>
-                    Highlight {dot(bgNow)}
-                  </button>
-                  {charPop === 'bg' && swatches('bg')}
-                </div>
-                <div className="relative">
-                  <button type="button" title={emphasisOk ? 'Emphasis — animated underline or wash' : 'Emphasis draws on horizontal, single-run text only'} aria-expanded={charPop === 'emphasis'} onMouseDown={(e) => e.preventDefault()} onClick={() => setCharPop((o) => (o === 'emphasis' ? null : 'emphasis'))} className={`${tbBtn} ${emphasisOk ? '' : 'opacity-50'}`}>
-                    Emphasis <span aria-hidden="true" className="text-white/50">▾</span>
-                  </button>
-                  {charPop === 'emphasis' && (
-                    <div className="absolute left-0 top-full mt-1.5 flex flex-col rounded-lg border border-white/15 bg-[#212121] p-1 shadow-2xl" role="menu" aria-label="Emphasis">
-                      {([['none', 'None'], ['underline', 'Underline'], ['highlight', 'Wash']] as const).map(([k, label]) => (
-                        <button key={k} type="button" role="menuitemradio" aria-checked={emphasisNow === k} onMouseDown={(e) => e.preventDefault()} onClick={() => { applyEmphasis(k); setCharPop(null) }} className={`rounded px-2.5 py-1 text-left font-mono text-[11px] transition-colors duration-100 hover:bg-white/10 ${emphasisNow === k ? 'text-white' : 'text-white/70'}`}>
-                          {label}
-                        </button>
-                      ))}
-                      {!emphasisOk && <span className="max-w-[180px] px-2.5 pb-1 pt-0.5 text-[10px] leading-4 text-white/40">Stored now; draws once this text is horizontal.</span>}
-                    </div>
-                  )}
-                </div>
-                <button type="button" title="Clear styling" aria-label="Clear styling" onMouseDown={(e) => e.preventDefault()} onClick={() => applyRange('clear')} className={`${tbBtn} ml-auto px-2.5`}>
-                  ✕
-                </button>
-              </div>,
+              <CharToolbar
+                box={{ x1: Math.min(...sel.map((g) => g.sx)), x2: Math.max(...sel.map((g) => g.sx + g.sw)), y1: Math.min(...sel.map((g) => g.sy)), y2: Math.max(...sel.map((g) => g.sy + g.sh)) }}
+                artRight={canvasRect.left + canvasRect.width}
+                bold={selAllBold}
+                color={selCommon('color') ?? tv.color}
+                bg={selCommon('bg')}
+                emphasis={emphasisNow}
+                emphasisOk={!tv.vertical && (tv.repeatLines ?? 1) <= 1}
+                pop={charPop}
+                setPop={setCharPop}
+                onBold={() => applyRange({ bold: !selAllBold })}
+                onColor={(hex) => applyRange({ color: hex })}
+                onBg={(hex) => applyRange({ bg: hex })}
+                onEmphasis={applyEmphasis}
+                onClear={() => applyRange('clear')}
+              />,
               rootRef.current ?? document.body,
             )
           })()}
