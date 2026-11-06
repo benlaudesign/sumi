@@ -8902,24 +8902,6 @@ function nextName(base: string, taken: string[]): string {
   for (let n = 2; ; n++) if (!set.has(`${base} ${n}`)) return `${base} ${n}`
 }
 
-// First visit: a curated composition rather than a blank page — one red
-// disc off the centre axis, a tategaki word on the right column, a mono
-// caption on the bottom line.
-function starterPage(p: Palette): PageState {
-  const shape = (patch: Patch) => deepMerge(defShape(p), patch)
-  const text = (patch: Patch) => deepMerge(defText(p), patch)
-  return {
-    bg: p.paper,
-    texture: false,
-    seed: 7,
-    els: [
-      { id: 1, type: 'shape', v: shape({ shape: 'circle', fill: 'solid', color: p.accent, size: 320, x: 38.2, y: 38.2, blur: 0 }) },
-      { id: 2, type: 'text', v: text({ text: '余白', font: 'Shippori Mincho', size: 120, weight: 600, vertical: true, tracking: 0.14, x: 83.33, y: 43.75, color: p.ink }) },
-      { id: 3, type: 'text', v: text({ text: 'MA — THE SPACE BETWEEN', font: 'Geist Mono', size: 18, weight: 400, tracking: 0.32, vertical: false, x: 50, y: 93.75, color: p.ink }) },
-    ],
-  }
-}
-
 function bootPages(p: Palette): { pages: Page[]; folders: Folder[]; currentId: string; migratedSlots: boolean } {
   let pages: Page[] = []
   let folders: Folder[] = []
@@ -8968,8 +8950,9 @@ function bootPages(p: Palette): { pages: Page[]; folders: Folder[]; currentId: s
       // unreadable legacy saves — leave them alone
     }
   }
+  // First visit: a blank page (Inspo offers starters on an empty page).
   if (pages.length === 0) {
-    pages = [{ ...starterPage(p), id: newPageId(), name: 'Untitled', createdAt: Date.now(), updatedAt: Date.now() }]
+    pages = [{ id: newPageId(), name: 'Untitled', els: [], bg: p.paper, texture: false, seed: 7, createdAt: Date.now(), updatedAt: Date.now() }]
   }
   if (!pages.some((pg) => pg.id === currentId)) currentId = pages[0].id
   return { pages, folders, currentId, migratedSlots }
