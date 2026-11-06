@@ -10,10 +10,12 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { createPortal } from 'react-dom'
+import { createPortal, flushSync } from 'react-dom'
+import { createRoot, type Root } from 'react-dom/client'
 import { FEATURES } from '../src/config/features'
 import { Kbd } from '../src/components/Kbd'
 import { MIN_EDITOR_WIDTH } from '../src/config/layout'
+import { runInspo, type InspoContext, type InspoEl, type InspoMode, type InspoPage, type InspoResult, type Scored } from '../src/inspo'
 
 // ── Canvas ────────────────────────────────────────────────────────────────
 
@@ -35,7 +37,7 @@ const MAX_DOTS = 3500 // halftone cap — keeps dialing smooth; noted contextual
 
 // ── Palettes (duotone discipline from the board) ──────────────────────────
 
-interface Palette {
+export interface Palette {
   paper: string
   ink: string
   accent: string
@@ -43,7 +45,7 @@ interface Palette {
 }
 
 // Restrained register — paper / ink / one red. The original board.
-const PALETTES: Record<string, Palette> = {
+export const PALETTES: Record<string, Palette> = {
   'Tokens': { paper: '#f4f4f2', ink: '#111111', accent: '#bc002d', alt: '#e13834' },
   'Red / black': { paper: '#f6f3ec', ink: '#141414', accent: '#d93a2b', alt: '#141414' },
   'Indigo': { paper: '#f2efe6', ink: '#1c3461', accent: '#2c4e8f', alt: '#101f3c' },
@@ -74,7 +76,7 @@ const BG_CHIPS = [
 
 // ── Fonts ─────────────────────────────────────────────────────────────────
 
-const CURATED_FONTS: { name: string; query: string }[] = [
+export const CURATED_FONTS: { name: string; query: string }[] = [
   { name: 'Noto Serif JP', query: 'Noto+Serif+JP:wght@400;600;900' },
   { name: 'Shippori Mincho', query: 'Shippori+Mincho:wght@400;600;800' },
   { name: 'Zen Old Mincho', query: 'Zen+Old+Mincho:wght@400;700;900' },
@@ -86,7 +88,7 @@ const CURATED_FONTS: { name: string; query: string }[] = [
 
 const BUILTIN_FONTS = ['Geist', 'Geist Mono']
 
-function loadGoogleFont(name: string, query?: string) {
+export function loadGoogleFont(name: string, query?: string) {
   const id = 'pg-font-' + name.toLowerCase().replace(/\s+/g, '-')
   if (document.getElementById(id)) return
   const link = document.createElement('link')
@@ -2189,7 +2191,7 @@ function FrameRender({ frame, view, ns = '' }: { frame: FrameV; view: { w: numbe
 
 type ElType = 'shape' | 'halftone' | 'text' | 'texture' | 'image' | 'ascii' | 'subject'
 
-interface El {
+export interface El {
   id: number
   type: ElType
   v: ShapeV | HalftoneV | TextV | TextureV | ImageV | AsciiV | SubjectV
@@ -2219,7 +2221,6 @@ const TEXTURE_KIND_DEFAULTS: Record<string, (p: Palette) => Patch> = {
 
 // Line-motif elements are deliberate, single-purpose drawings — generative
 // moves (Randomize / Inspo) leave them alone and never create them.
-const isMotifEl = (e: El) => e.type === 'shape' && (e.v as ShapeV).shape === 'motif'
 
 // ── Portability tier — internal only, no UI badge ───────────────────────
 // A = universal SVG (plain shapes/paths/gradients/text) — imports into
@@ -2294,7 +2295,7 @@ const defImage = (): ImageV => ({
   blend: 'normal', opacity: 1, anim: defAnim(),
 })
 
-const DEFAULTS: Record<ElType, (p: Palette) => ShapeV | HalftoneV | TextV | TextureV | ImageV | AsciiV | SubjectV> = {
+export const DEFAULTS: Record<ElType, (p: Palette) => ShapeV | HalftoneV | TextV | TextureV | ImageV | AsciiV | SubjectV> = {
   shape: defShape,
   halftone: defHalftone,
   text: defText,
@@ -2310,7 +2311,7 @@ type Patch = Record<string, unknown>
 
 // Presets choose the shape GENERATOR only — treatments (blur, grain,
 // offset ink, dissolve, pattern fills) are dials under Ink, not presets.
-const SHAPE_PRESETS: Record<string, (p: Palette) => Patch> = {
+export const SHAPE_PRESETS: Record<string, (p: Palette) => Patch> = {
   'Hinomaru': (p) => ({ shape: 'circle', fill: 'solid', color: p.accent, blur: 0, size: 230, y: 40, rotation: 0 }),
   'Half moon': (p) => ({ shape: 'semicircle', fill: 'solid', color: p.ink, blur: 0, size: 220, y: 62, rotation: 0 }),
   'Seigaiha': (p) => ({
@@ -2324,7 +2325,7 @@ const SHAPE_PRESETS: Record<string, (p: Palette) => Patch> = {
   }),
 }
 
-const HALFTONE_PRESETS: Record<string, (p: Palette) => Patch> = {
+export const HALFTONE_PRESETS: Record<string, (p: Palette) => Patch> = {
   'Kusama field': (p) => ({
     color: p.ink, layout: 'scatter', shape: 'circle', dotSize: 4, spacing: 11, jitter: 0.8, angle: 0,
     x: 15, y: 30, width: 70, height: 45, gradient: { falloff: 'none' },
@@ -2347,7 +2348,7 @@ const HALFTONE_PRESETS: Record<string, (p: Palette) => Patch> = {
 // text; the color dial is the only thing that does.
 const TEXT_INK = '#111111'
 
-const TEXT_PRESETS: Record<string, (p: Palette) => Patch> = {
+export const TEXT_PRESETS: Record<string, (p: Palette) => Patch> = {
   'Massive character': () => ({ text: '思', font: 'Noto Serif JP', size: 460, weight: 600, tracking: 0, vertical: false, color: TEXT_INK, highlight: 'none' }),
   'Tategaki column': () => ({ text: '生き甲斐のある暮らし', font: 'Shippori Mincho', size: 54, weight: 400, tracking: 0.12, vertical: true, x: 86, y: 40, color: TEXT_INK, highlight: 'none' }),
   'Caption mono': () => ({ text: 'TOKYO — PORTFOLIO 2026', font: 'Geist Mono', size: 20, weight: 400, tracking: 0.35, vertical: false, x: 50, y: 93, color: TEXT_INK, highlight: 'none' }),
@@ -2384,7 +2385,7 @@ const PRESETS: Record<ElType, Record<string, (p: Palette) => Patch>> = {
   subject: {}, // the subject picker + posing dials are the starting-point surface
 }
 
-function deepMerge<T>(base: T, patch: Patch): T {
+export function deepMerge<T>(base: T, patch: Patch): T {
   const out: Record<string, unknown> = { ...(base as Record<string, unknown>) }
   for (const [k, val] of Object.entries(patch)) {
     const cur = out[k]
@@ -2588,8 +2589,6 @@ const SHAPE_OPTIONS = [
 // Shapes that are line drawings — always stroked, never filled.
 const LINE_SHAPES = ['enso', 'rings']
 
-// The pool generative moves draw from.
-const RANDOM_SHAPES = SHAPE_OPTIONS
 
 // Plus-sign polygon, arm half-width a.
 function crossPoints(s: number) {
@@ -6854,7 +6853,7 @@ function AsciiEl({ el, onDown, gRef, view, ns = '', press = false, mReg, aReg, c
   )
 }
 
-function PreviewCanvas({ page, ns = '' }: { page: PageState; ns?: string }) {
+export function PreviewCanvas({ page, ns = '' }: { page: PageState; ns?: string }) {
   const w = page.w ?? VIEW_W
   const h = page.h ?? VIEW_H
   const noop = () => {}
@@ -6934,6 +6933,45 @@ function pageHasMotion(page: PageState): boolean {
     if (!m) return false
     return normalizeMotion(m.type) !== 'none' || !!(m.segments && m.segments.length > 0)
   })
+}
+
+// ── Inspo plumbing ────────────────────────────────────────────────────────
+// Static SVG markup for an arbitrary page, rendered through PreviewCanvas
+// into one reusable hidden root and serialised. The Inspo pipeline
+// rasterises this (src/inspo/measure.ts) to read ink coverage.
+let inspoHost: HTMLDivElement | null = null
+let inspoRoot: Root | null = null
+export function pageSvgMarkup(page: InspoPage): string {
+  if (typeof document === 'undefined') return ''
+  if (!inspoHost || !inspoRoot) {
+    inspoHost = document.createElement('div')
+    inspoHost.setAttribute('aria-hidden', 'true')
+    inspoHost.style.cssText = 'position:fixed;left:-10000px;top:0;width:900px;height:1200px;visibility:hidden;pointer-events:none;overflow:hidden'
+    document.body.appendChild(inspoHost)
+    inspoRoot = createRoot(inspoHost)
+  }
+  const ps: PageState = { els: page.els as unknown as El[], bg: page.bg, texture: false, seed: page.seed, w: page.w, h: page.h }
+  flushSync(() => inspoRoot!.render(<PreviewCanvas page={ps} ns="-m" />))
+  const svg = inspoHost.querySelector('svg')
+  if (!svg) return ''
+  const clone = svg.cloneNode(true) as SVGSVGElement
+  clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+  clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink')
+  clone.setAttribute('width', String(page.w))
+  clone.setAttribute('height', String(page.h))
+  clone.removeAttribute('style')
+  clone.querySelectorAll('[data-ui]').forEach((n) => n.remove())
+  return new XMLSerializer().serializeToString(clone)
+}
+
+export function makeInspoCtx(palette: Palette, fonts: string[]): InspoContext {
+  return {
+    palette,
+    fonts,
+    subjectAllowed: FEATURES.subject,
+    makeDefault: (type) => DEFAULTS[type](palette) as unknown as Record<string, unknown>,
+    svgMarkup: pageSvgMarkup,
+  }
 }
 
 // Preview mode's playable variant of PreviewCanvas — same static render,
@@ -8488,7 +8526,7 @@ function AsciiSubjectSourcePicker({
 const LAYER_CAP = 1000
 
 // One canvas worth of state — used by pages and save slots.
-interface PageState {
+export interface PageState {
   els: El[]
   bg: string
   texture: boolean
@@ -8837,13 +8875,12 @@ function SumiEditor() {
   const [canUndo, setCanUndo] = useState(false)
   const [canRedo, setCanRedo] = useState(false)
   // Checkpoint: the composition as it was before the current run of
-  // generative actions (Randomize / Inspo). Any manual edit ends
+  // generative actions (Inspo). Any manual edit ends
   // the run, so the next generative click starts a fresh checkpoint.
   const [hasCheckpoint, setHasCheckpoint] = useState(false)
   const checkpoint = useRef<Snapshot | null>(null)
   const genStreak = useRef(false)
   // Inspo alternates the poster between light (paper) and dark (#131313) mode.
-  const inspoDark = useRef(false)
   // ── Motion timeline engine ──────────────────────────────────────────────
   const [motionOpen, setMotionOpen] = useState(false)
   // Panel height, drag-resizable from its top edge (see the grip handle in
@@ -9177,7 +9214,7 @@ function SumiEditor() {
 
   const selectedId = selectedIds.length === 1 ? selectedIds[0] : null
   const selected = els.find((e) => e.id === selectedId) ?? null
-  const fontOptions = [...BUILTIN_FONTS, ...CURATED_FONTS.map((f) => f.name), ...customFonts]
+  const fontOptions = useMemo(() => [...BUILTIN_FONTS, ...CURATED_FONTS.map((f) => f.name), ...customFonts], [customFonts])
 
   const flash = useCallback((msg: string) => {
     setToast(msg)
@@ -10236,307 +10273,6 @@ function SumiEditor() {
     setEls((list) => list.map((e, i) => (e.type === 'texture' || e.type === 'image' ? e : { ...e, v: deepMerge(e.v, { color: cols[i % 3] }) })))
   }
 
-  // "Inspo" — riffs on what's already on the page. Reads the current
-  // composition and pushes it toward one of the board's composition modes:
-  // radical emptiness, dense texture, counterpoint additions, or bleeding
-  // an element off the edge. Adds or removes elements accordingly.
-  // Text pools for Inspo — aesthetic fragments, not branding. Mixed scripts:
-  // single kanji protagonists, JP aesthetic concepts, romaji words, and
-  // bilingual caption pairings.
-  const CAPTIONS = [
-    'ma 間 — the space between',
-    '余白 / NEGATIVE SPACE',
-    'MONO NO AWARE',
-    'wabi-sabi 侘寂',
-    'YŪGEN 幽玄',
-    'ichigo ichie 一期一会',
-    'FORM / COLOR / VOID',
-    '静けさ · stillness',
-    'THE SUN ALSO RISES',
-    'shibui 渋い',
-    'PAPER / INK / RED',
-    'TOKYO — 2026',
-    'kanso 簡素 · simplicity',
-  ]
-  const CHARS = ['思', '間', '東', '紅', '海', '静', '風', '月', '花', '雪', '光', '影', '夢', '道', '空', '心']
-  const JP_WORDS = ['東京', '余白', '幽玄', '侘寂', '感動', '無限', '静寂', '朝日', '一期一会']
-  const ROMAJI = ['ma', 'wabi', 'sabi', 'yūgen', 'kanso', 'shizen', 'en 縁']
-  const JP_SERIFS = ['Noto Serif JP', 'Shippori Mincho', 'Zen Old Mincho']
-
-  const inspo = () => {
-    beginGenerative()
-    pushUndo()
-    const s = Math.floor(Math.random() * 100000)
-    setSeed(s)
-    const rng = mulberry32(s)
-    const pick = <T,>(arr: T[]) => arr[Math.floor(rng() * arr.length)]
-    const p = palette
-    const cols = [p.accent, p.ink, p.alt]
-
-    const mk = (type: ElType, patch: Patch): El => ({
-      id: nextId.current++,
-      type,
-      v: deepMerge(DEFAULTS[type](p), patch),
-    })
-
-    let next: El[] = structuredClone(els)
-    const add = (type: ElType, patch: Patch) => {
-      if (type === 'subject' && !FEATURES.subject) return // flag off: never generate subjects
-      if (next.length < LAYER_CAP) next.push(mk(type, patch))
-    }
-    const patchEl = (el: El, patch: Patch) => {
-      el.v = deepMerge(el.v, patch)
-    }
-
-    const hasText = next.some((e) => e.type === 'text')
-    const hasHalf = next.some((e) => e.type === 'halftone')
-    const circles = next.filter((e) => e.type === 'shape' && (e.v as ShapeV).shape === 'circle')
-
-    const dir =
-      next.length === 0
-        ? pick(['horizon', 'dense', 'typeHero'])
-        : next.length >= 5
-          ? pick(['minimal', 'minimal', 'typeHero', 'bleed', 'echo'])
-          : next.length <= 2
-            ? pick(['dense', 'echo', 'horizon', 'counterpoint', 'bleed'])
-            : pick(['minimal', 'dense', 'counterpoint', 'echo', 'horizon', 'typeHero', 'bleed'])
-
-    const captionPatch = (): Patch => ({
-      text: pick(CAPTIONS), font: 'Geist Mono', size: 18, weight: 400,
-      tracking: 0.32, vertical: false, x: 50, y: pick([8, 91]), color: p.ink,
-    })
-    // Big type protagonist — three flavors: single kanji, JP word (often set
-    // vertically, tategaki), or a romaji aesthetic word in a heavy cut.
-    const charPatch = (): Patch => {
-      const roll = rng()
-      if (roll < 0.5) {
-        return {
-          text: pick(CHARS), font: pick(JP_SERIFS),
-          size: Math.round(260 + rng() * 220), weight: pick([400, 600]),
-          vertical: false, tracking: 0,
-          x: pick([30, 62, 74]), y: pick([34, 46]), color: pick([p.ink, p.accent]),
-        }
-      }
-      if (roll < 0.85) {
-        const w = pick(JP_WORDS)
-        const vertical = rng() < 0.55
-        return {
-          text: w, font: pick([...JP_SERIFS, 'Noto Sans JP', 'Zen Kaku Gothic New']),
-          size: Math.round((380 + rng() * 160) / Math.pow(w.length, 0.72)),
-          weight: pick([400, 600, 700]), vertical, tracking: Math.round(rng() * 16) / 100,
-          x: vertical ? pick([16, 84]) : pick([35, 50, 64]),
-          y: vertical ? pick([36, 46]) : pick([30, 44, 56]),
-          color: pick([p.ink, p.accent]),
-        }
-      }
-      return {
-        text: pick(ROMAJI), font: pick(['Zen Kaku Gothic New', 'Rampart One', 'Geist']),
-        size: Math.round(160 + rng() * 180), weight: pick([700, 900]),
-        vertical: false, tracking: -0.02,
-        x: pick([32, 50, 66]), y: pick([36, 50]), color: pick([p.ink, p.accent]),
-      }
-    }
-
-    if (dir === 'minimal') {
-      // Radical emptiness: one protagonist, generous margins, maybe a whisper
-      // of mono caption.
-      const keep = next.find((e) => e.type === 'shape' && !isMotifEl(e)) ?? next[0]
-      const keepCaption = next.find((e) => e.type === 'text' && (e.v as TextV).size < 60)
-      next = next.filter((e) => e === keep || (keepCaption !== undefined && e === keepCaption && rng() < 0.7))
-      if (!isMotifEl(keep)) {
-        patchEl(keep, {
-          x: pick([32, 50, 66]),
-          y: pick([26, 36, 42]),
-          ...(keep.type === 'shape' ? { size: Math.round(90 + rng() * 140) } : {}),
-        })
-      }
-      if (!next.some((e) => e.type === 'text') && rng() < 0.4) add('text', captionPatch())
-    } else if (dir === 'dense') {
-      // Dense texture wall: fill in complements until it hums.
-      if (!hasHalf) add('halftone', HALFTONE_PRESETS[pick(['Texture block', 'Kusama field'])](p))
-      add('shape', {
-        shape: pick(RANDOM_SHAPES),
-        fill: pick(['dots', 'lines', 'solid', 'solid']),
-        color: pick(cols),
-        size: Math.round(60 + rng() * 160),
-        x: Math.round(10 + rng() * 80),
-        y: Math.round(10 + rng() * 80),
-        rotation: pick([0, 45, 90]),
-      })
-      if (next.length < 6) {
-        add('shape', {
-          shape: pick(['square', 'bar', 'semicircle', 'quarter']),
-          fill: pick(['solid', 'lines']),
-          color: pick(cols),
-          size: Math.round(50 + rng() * 120),
-          x: Math.round(rng() * 100),
-          y: Math.round(rng() * 100),
-          rotation: pick([0, 90, 180]),
-        })
-      }
-      if (!hasText && rng() < 0.5) add('text', charPatch())
-    } else if (dir === 'counterpoint') {
-      // Complementary additions based on what's missing or echoable.
-      const moves: (() => void)[] = []
-      if (!hasText) moves.push(() => add('text', rng() < 0.5 ? charPatch() : captionPatch()))
-      if (!hasHalf)
-        moves.push(() =>
-          add('halftone', {
-            ...HALFTONE_PRESETS['Halftone gradient'](p),
-            y: pick([58, 66]),
-            color: pick(cols),
-          }),
-        )
-      if (circles.length > 0) {
-        const c = circles[0].v as ShapeV
-        moves.push(() =>
-          add('shape', {
-            shape: 'circle', fill: 'outline', strokeWidth: 1.5, color: p.ink,
-            size: Math.round(c.size * (1.25 + rng() * 0.45)), x: c.x, y: c.y,
-          }),
-        )
-      } else {
-        moves.push(() =>
-          add('shape', {
-            ...SHAPE_PRESETS['Hinomaru'](p),
-            size: Math.round(70 + rng() * 110),
-            x: pick([24, 50, 76]),
-            y: pick([22, 34]),
-          }),
-        )
-      }
-      // Fisher-Yates would be overkill for ≤3 moves — rotate by a random offset.
-      const start = Math.floor(rng() * moves.length)
-      const take = Math.min(moves.length, 1 + (rng() < 0.5 ? 1 : 0))
-      for (let i = 0; i < take; i++) moves[(start + i) % moves.length]()
-    } else if (dir === 'echo') {
-      // Rhythm & repetition: take a shape and repeat it along a diagonal,
-      // shrinking each step, the last one hollowing into an outline.
-      const src = next.find((e) => e.type === 'shape' && !isMotifEl(e))
-      if (src) {
-        const svv = src.v as ShapeV
-        const n = 2 + (rng() < 0.5 ? 1 : 0)
-        const dx = pick([13, 17, 21]) * (svv.x > 55 ? -1 : 1)
-        const dy = pick([0, 6, 11])
-        for (let i = 1; i <= n; i++) {
-          add('shape', {
-            shape: svv.shape,
-            motif: svv.motif,
-            fill: i === n ? 'outline' : svv.fill,
-            strokeWidth: 1.5,
-            color: i % 2 === 1 ? pick([p.ink, p.alt]) : svv.color,
-            size: Math.round(svv.size * Math.pow(0.72, i)),
-            x: Math.round(svv.x + dx * i),
-            y: Math.round(svv.y + dy * i),
-            rotation: svv.rotation,
-          })
-        }
-      } else {
-        // No shape to echo — seed a descending trio of suns.
-        for (let i = 0; i < 3; i++) {
-          add('shape', {
-            shape: 'circle', fill: i === 2 ? 'outline' : 'solid', strokeWidth: 1.5,
-            color: i % 2 ? p.ink : p.accent,
-            size: Math.round(150 * Math.pow(0.7, i)),
-            x: 26 + i * 22, y: 30 + i * 14,
-          })
-        }
-      }
-    } else if (dir === 'horizon') {
-      // Horizon line: a sun rising from the bottom edge — the poster becomes
-      // sky. Existing elements drift upward to clear the horizon.
-      for (const e of next) {
-        if (isMotifEl(e)) continue
-        const y = (e.v as { y: number }).y
-        if (y > 60) patchEl(e, { y: Math.round(y * 0.55) })
-      }
-      add('shape', {
-        shape: 'semicircle', fill: pick(['solid', 'solid', 'dots']), color: pick([p.accent, p.alt]),
-        size: Math.round(150 + rng() * 130), x: pick([35, 50, 68]), y: 97,
-        rotation: 0, blur: pick([0, 0, 16]),
-      })
-      if (rng() < 0.4)
-        add('shape', {
-          shape: 'circle', fill: 'outline', strokeWidth: 1.5, color: p.ink,
-          size: Math.round(30 + rng() * 50), x: pick([20, 80]), y: pick([16, 26]),
-        })
-      if (!hasText && rng() < 0.6) add('text', { ...captionPatch(), y: 10 })
-    } else if (dir === 'typeHero') {
-      // Type as the whole poster: one massive glyph, everything else reduced
-      // to a small accent.
-      const keepAccent = next.find((e) => e.type === 'shape' && (e.v as ShapeV).fill === 'solid')
-      const heroText = next.find((e) => e.type === 'text')
-      next = [
-        ...(keepAccent ? [keepAccent] : []),
-        ...(heroText ? [heroText] : []),
-      ]
-      if (keepAccent)
-        patchEl(keepAccent, {
-          size: Math.round(28 + rng() * 45),
-          x: pick([14, 86]),
-          y: pick([12, 84]),
-          blur: 0,
-        })
-      if (heroText) {
-        patchEl(heroText, {
-          size: Math.round(560 + rng() * 180), weight: pick([600, 900]),
-          vertical: false, x: pick([46, 52]), y: pick([42, 48]),
-          color: pick([p.ink, p.accent]),
-        })
-      } else {
-        add('text', { ...charPatch(), size: Math.round(560 + rng() * 180), x: pick([46, 52]), y: pick([42, 48]) })
-      }
-      if (rng() < 0.5) add('text', captionPatch())
-    } else {
-      // Bleed: oversize one element off the edge, optionally add a small
-      // counterweight in the far corner.
-      const candidates = next.filter((e) => e.type !== 'halftone' && !isMotifEl(e))
-      if (candidates.length > 0) {
-        const t = candidates[Math.floor(rng() * candidates.length)]
-        patchEl(t, {
-          size: Math.round(((t.v as { size: number }).size || 200) * (1.7 + rng() * 0.9)),
-          x: pick([-4, 8, 94, 104]),
-          y: pick([12, 45, 86]),
-        })
-      }
-      if (rng() < 0.5) {
-        if (rng() < 0.5) add('text', captionPatch())
-        else add('shape', { shape: 'circle', fill: 'solid', color: p.accent, size: Math.round(20 + rng() * 40), x: pick([12, 88]), y: pick([14, 82]) })
-      }
-    }
-
-    // Alternate light / dark: every other Inspo press flips the poster to a
-    // #131313 field with white type (dark inks become white; reds survive).
-    const dark = !inspoDark.current
-    inspoDark.current = dark
-    const darkInks = [p.ink.toLowerCase(), '#111111', '#0e0e0e', '#141414', '#1c1c1c', '#101f3c']
-    if (dark) {
-      setBg('#131313')
-      for (const e of next) {
-        const c = ((e.v as { color: string }).color || '').toLowerCase()
-        if (e.type === 'text' || darkInks.includes(c)) patchEl(e, { color: '#ffffff' })
-      }
-    } else {
-      setBg(p.paper)
-      for (const e of next) {
-        const c = ((e.v as { color: string }).color || '').toLowerCase()
-        if (c === '#ffffff' || c === p.paper.toLowerCase()) patchEl(e, { color: p.ink })
-      }
-    }
-
-    setEls(next)
-    setSelectedIds([])
-    const LABELS: Record<string, string> = {
-      minimal: 'radical emptiness',
-      dense: 'dense texture',
-      counterpoint: 'counterpoint',
-      echo: 'rhythm & repetition',
-      horizon: 'horizon line',
-      typeHero: 'type as hero',
-      bleed: 'bleed the edge',
-    }
-    flash(`Inspo → ${LABELS[dir]} · ${dark ? 'dark' : 'light'}`)
-  }
 
   // Self-contained export: UI stripped, animations frozen, CSS font vars
   // resolved to real families, and the font files themselves embedded as
@@ -12588,6 +12324,7 @@ function SumiEditor() {
   zOrderRef.current = zOrder
   const addElRef = useRef<(t: ElType) => void>(() => {})
   addElRef.current = addEl
+  const inspoRef = useRef<{ open: () => void; close: () => boolean }>({ open: () => {}, close: () => false })
   const pushUndoCoalescedRef = useRef<(key: string) => void>(() => {})
   pushUndoCoalescedRef.current = pushUndoCoalesced
   // Escape cancels an open crop edit (reverting to whatever it was before
@@ -12716,8 +12453,14 @@ function SumiEditor() {
           else addElRef.current(addType)
           return
         }
+        if (e.key === 'r') {
+          e.preventDefault()
+          inspoRef.current.open()
+          return
+        }
         if (e.key === 'Escape') {
           if (cropCancelRef.current()) return
+          if (inspoRef.current.close()) return
           setSelectedIds([])
           return
         }
@@ -12820,135 +12563,91 @@ function SumiEditor() {
     })
   }
 
-  // Deep randomize: rerolls each element's kind (shape type, fill, pattern,
-  // font…) AND the palette — for jumping to a genuinely different idea.
-  const randomizeElements = () => {
-    beginGenerative()
-    pushUndo()
-    const s = Math.floor(Math.random() * 100000)
-    setSeed(s)
-    const rng = mulberry32(s)
-    const pick = <T,>(arr: T[]) => arr[Math.floor(rng() * arr.length)]
-    const palName = pick(Object.keys(ALL_PALETTES))
-    const p = ALL_PALETTES[palName]
-    const expressive = palName in EXPRESSIVE_PALETTES
-    setPaletteName(palName)
-    setBg(p.paper)
-    // Controlled chaos: the expressive register dares at the PRESS level too
-    // — overprint, page grain, a sky ramp — while restrained stays clean.
-    setOverprint(expressive && rng() < 0.6)
-    setPressGrain(expressive && rng() < 0.6 ? Math.round((0.25 + rng() * 0.4) * 100) / 100 : 0)
-    setBgGrad(
-      expressive && rng() < 0.35
-        ? { on: true, color2: pick([p.alt, p.accent]), color3: '', mid: 0.5, angle: pick([0, 90, 180]), radial: rng() < 0.3, cx: 50, cy: 45, spread: 0.9 }
-        : null,
-    )
-    const cols = [p.accent, p.alt, p.ink]
-    // One dominant element anchors the system; everything else orbits it.
-    const domIdx = Math.floor(rng() * Math.max(1, els.length))
-    setEls((list) =>
-      list.map((e, i) => {
-        if (isMotifEl(e) || e.type === 'texture' || e.type === 'image') return e
-        const dominant = expressive && i === domIdx
-        let patch: Patch
-        if (e.type === 'shape') {
-          patch = {
-            shape: expressive
-              ? pick([...RANDOM_SHAPES, 'burst', 'burst', 'rings'])
-              : pick(RANDOM_SHAPES),
-            fill: expressive
-              ? pick(['solid', 'solid', 'gradient', 'gradient', 'glow', 'outline', 'dots', 'lines', 'seigaiha'])
-              : pick(['solid', 'solid', 'solid', 'outline', 'dots', 'lines', 'dissolve', 'gradient', 'gradient', 'seigaiha', 'shippo', 'uroko']),
-            color: pick(cols),
-            x: Math.round(10 + rng() * 80),
-            y: Math.round(10 + rng() * 80),
-            size: dominant ? Math.round(380 + rng() * 280) : Math.round(expressive ? 36 + rng() * 260 : 50 + rng() * 320),
-            rotation: expressive ? pick([0, 0, 15, -20, 45, 90, -45]) : pick([0, 0, 0, 45, 90, -45]),
-            blur: pick([0, 0, 0, 0, Math.round(15 + rng() * 30)]),
-            rays: { count: pick([12, 16, 24, 48, 72]), duty: Math.round((0.2 + rng() * 0.5) * 100) / 100, taper: pick([1, 1, 0, -1]), inner: Math.round(rng() * 30) / 100 },
-            // Ink behavior (expressive register): occasional overprint,
-            // grain, offset second passes — exuberant but composed.
-            grad: {
-              color2: pick(cols),
-              color3: expressive && rng() < 0.4 ? pick(cols) : '',
-              mid: Math.round((0.35 + rng() * 0.3) * 100) / 100,
-              angle: pick([0, 90, 90, 180]),
-              radial: rng() < 0.25,
-              spread: Math.round((0.6 + rng() * 0.6) * 100) / 100,
-              fall: Math.round((1 + rng() * 1.5) * 100) / 100,
-              cx: 50,
-              cy: 50,
-            },
-            inkGrain: (expressive ? rng() < 0.5 : rng() < 0.3) ? Math.round(rng() * 55) / 100 : 0,
-            blend: expressive ? pick(['normal', 'multiply', 'multiply']) : pick(['normal', 'normal', 'normal', 'multiply']),
-            misreg:
-              rng() < (expressive ? 0.3 : 0.18)
-                ? { on: true, dx: Math.round(rng() * 16 - 8), dy: Math.round(rng() * 12 - 6), color: pick(cols) }
-                : { on: false },
-            pattern: (() => {
-              // Couple dot/line size to spacing so patterns never cram.
-              const spacing = Math.round(10 + rng() * 20)
-              const lineGap = Math.round(4 + rng() * 14)
-              return {
-                dotSize: Math.round(spacing * (0.14 + rng() * 0.23) * 10) / 10,
-                spacing,
-                jitter: Math.round(rng() * 10) / 10,
-                lineThickness: Math.round(lineGap * (0.2 + rng() * 0.35) * 10) / 10,
-                lineGap,
-                lineDirection: pick([0, 45, 90, 135]),
-                dissolveStart: Math.round((0.3 + rng() * 0.4) * 100) / 100,
-              }
-            })(),
-          }
-        } else if (e.type === 'text') {
-          patch = {
-            font: pick(fontOptions),
-            weight: pick([400, 600, 700, 900]),
-            color: pick([p.accent, p.ink]),
-            vertical: rng() < 0.2,
-            x: Math.round(15 + rng() * 70),
-            y: Math.round(15 + rng() * 70),
-            size: dominant ? Math.round(320 + rng() * 300) : Math.round(40 + rng() * 400),
-            tracking: Math.round(rng() * 30) / 100,
-            ...(expressive
-              ? {
-                  arc: rng() < 0.3 ? pick([45, -35, 80, 120]) : 0,
-                  blend: pick(['normal', 'normal', 'multiply']),
-                  misreg:
-                    rng() < 0.25
-                      ? { on: true, dx: Math.round(rng() * 10 - 5), dy: Math.round(rng() * 8 - 4), color: pick(cols) }
-                      : { on: false },
-                }
-              : { arc: 0 }),
-          }
-        } else {
-          const spacing = Math.round(10 + rng() * 26)
-          patch = {
-            layout: pick(['grid', 'staggered', 'scatter']),
-            shape: pick(['circle', 'circle', 'square']),
-            color: pick(cols),
-            dotSize: Math.round(spacing * (0.14 + rng() * 0.23) * 10) / 10,
-            spacing,
-            angle: pick([0, 15, 30, 45]),
-            jitter: Math.round(rng() * 10) / 10,
-            x: Math.round(rng() * 60),
-            y: Math.round(rng() * 60),
-            width: Math.round(20 + rng() * 70),
-            height: Math.round(10 + rng() * 60),
-            gradient: {
-              falloff: pick(['none', 'linear', 'ease']),
-              direction: pick([0, 90, 180, 270]),
-              invert: rng() < 0.3,
-            },
-          }
-        }
-        return { ...e, v: deepMerge(e.v, patch) }
-      }),
-    )
-  }
-
   const btn =
     'rounded border border-neutral-300 bg-paper px-2 py-1 font-mono text-[11px] text-ink hover:border-neutral-500 transition-colors duration-150 disabled:opacity-40 disabled:pointer-events-none'
+
+  // ── Inspo ─────────────────────────────────────────────────────────────
+  // Reads the page's signature and returns compositions that hold up
+  // under the rules in src/inspo/rules.ts. Nothing is applied until a
+  // thumbnail is clicked (one undo step, Revert still works). Seeded:
+  // same page + seed + mode = same six.
+  const [inspoOpen, setInspoOpen] = useState(false)
+  const [inspoMode, setInspoMode] = useState<InspoMode>('subtle')
+  const [inspoSeed, setInspoSeed] = useState(() => Math.floor(Math.random() * 90000) + 10000)
+  const [inspoSeedDraft, setInspoSeedDraft] = useState<string | null>(null)
+  const [inspoResult, setInspoResult] = useState<InspoResult | null>(null)
+  const [inspoBusy, setInspoBusy] = useState(false)
+  const [inspoProgress, setInspoProgress] = useState({ tries: 0, passing: 0 })
+  const inspoRunId = useRef(0)
+  const inspoCtx = useMemo(() => makeInspoCtx(palette, fontOptions), [palette, fontOptions])
+
+  const runInspoBatch = async (batchSeed: number, mode: InspoMode) => {
+    const runId = ++inspoRunId.current
+    setInspoBusy(true)
+    setInspoResult(null)
+    setInspoProgress({ tries: 0, passing: 0 })
+    const base: InspoPage = { els: structuredClone(els) as unknown as InspoEl[], bg, w: view.w, h: view.h, seed }
+    // Off the current React flush before the pipeline's own flushSync renders.
+    await new Promise((r) => setTimeout(r, 0))
+    let lastTries = 0
+    let lastPassing = 0
+    const res = await runInspo({
+      base,
+      batchSeed,
+      mode,
+      ctx: inspoCtx,
+      onProgress: (tries, passing) => {
+        if (runId !== inspoRunId.current) return
+        if (tries - lastTries >= 6 || passing !== lastPassing) {
+          lastTries = tries
+          lastPassing = passing
+          setInspoProgress({ tries, passing })
+        }
+      },
+    })
+    if (runId !== inspoRunId.current) return
+    setInspoResult(res)
+    setInspoBusy(false)
+  }
+
+  const openInspo = () => {
+    setInspoOpen(true)
+    void runInspoBatch(inspoSeed, inspoMode)
+  }
+  const closeInspo = () => {
+    inspoRunId.current++
+    setInspoOpen(false)
+    setInspoBusy(false)
+  }
+  const inspoMore = () => {
+    const next = (inspoSeed + 1) % 100000
+    setInspoSeed(next)
+    void runInspoBatch(next, inspoMode)
+  }
+  const setInspoModeAndRun = (m: InspoMode) => {
+    setInspoMode(m)
+    void runInspoBatch(inspoSeed, m)
+  }
+  const applyInspo = (c: Scored) => {
+    beginGenerative()
+    pushUndo()
+    // Elements the generator added carry provisional ids (≥ 1e6) — give
+    // them real ones from this page's counter.
+    const next = (structuredClone(c.els) as unknown as El[]).map((e) => (e.id >= 1_000_000 ? { ...e, id: nextId.current++ } : e))
+    setEls(next)
+    setSelectedIds([])
+    flash(`Inspo ${c.seed} · ${c.archetype}`)
+  }
+  const inspoPage = (c: Scored): PageState => ({ els: c.els as unknown as El[], bg: c.bg, texture, seed, w: view.w, h: view.h, bgGrad, pressGrain, overprint, frame })
+  // Keeps the keydown listener (mounted once, above) pointing at fresh handlers.
+  inspoRef.current = {
+    open: openInspo,
+    close: () => {
+      if (!inspoOpen) return false
+      closeInspo()
+      return true
+    },
+  }
 
   const sv = selected?.type === 'shape' ? (selected.v as ShapeV) : null
   const hv = selected?.type === 'halftone' ? (selected.v as HalftoneV) : null
@@ -13484,23 +13183,20 @@ function SumiEditor() {
           </button>
         )}
 
-        <button type="button" className={btn} onClick={randomizeElements} title="Reroll element types, styles and palette">
-          Randomize
-        </button>
         <button
           type="button"
-          className={btn}
-          onClick={inspo}
-          title="Riff on the current composition — adds or strips elements to explore a new direction"
+          className={`${btn} ${inspoOpen ? 'border-neutral-600 bg-black/[0.05]' : ''}`}
+          onClick={() => (inspoOpen ? closeInspo() : openInspo())}
+          title="Inspo — six compositions that keep this page's signature — press r"
         >
-          Inspo
+          Inspo<Kbd>r</Kbd>
         </button>
         {hasCheckpoint && (
           <button
             type="button"
             className={`${btn} border-red text-red`}
             onClick={revert}
-            title="Jump back to the composition as it was before this Randomize / Inspo run"
+            title="Jump back to the composition as it was before this Inspo run"
           >
             Revert
           </button>
@@ -13807,6 +13503,102 @@ function SumiEditor() {
           )}
         </div>
       </header>
+
+      {/* ── Inspo tray — six candidates that keep the page's signature ── */}
+      {inspoOpen && (
+        <section className="flex shrink-0 items-stretch gap-4 border-b border-neutral-300 bg-paper px-3 py-2.5" aria-label="Inspo">
+          <div className="flex w-40 shrink-0 flex-col gap-2 font-mono text-[10.5px]">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] uppercase tracking-[0.18em] text-muted">Inspo</span>
+              <button type="button" className={`${btn} px-1.5`} onClick={closeInspo} title="Close (Esc)" aria-label="Close Inspo">×</button>
+            </div>
+            <div className="flex gap-1 rounded-md bg-neutral-100 p-1" role="group" aria-label="How far to stray">
+              {(['subtle', 'bold'] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setInspoModeAndRun(m)}
+                  aria-pressed={inspoMode === m}
+                  className={`flex-1 rounded px-1.5 py-1 capitalize transition-colors duration-100 ${inspoMode === m ? 'bg-paper text-ink shadow-sm' : 'text-neutral-600 hover:text-ink'}`}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+            <label className="flex items-center gap-2 text-neutral-700">
+              seed
+              <input
+                type="text"
+                inputMode="numeric"
+                value={inspoSeedDraft ?? String(inspoSeed)}
+                onChange={(e) => setInspoSeedDraft(e.target.value)}
+                onBlur={() => {
+                  if (inspoSeedDraft !== null) {
+                    const n = Number(inspoSeedDraft)
+                    if (Number.isFinite(n) && inspoSeedDraft.trim() !== '') {
+                      const v = Math.max(0, Math.floor(n)) % 100000
+                      setInspoSeed(v)
+                      void runInspoBatch(v, inspoMode)
+                    }
+                  }
+                  setInspoSeedDraft(null)
+                }}
+                onKeyDown={(e) => {
+                  e.stopPropagation()
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                  if (e.key === 'Escape') {
+                    setInspoSeedDraft(null)
+                    ;(e.target as HTMLInputElement).blur()
+                  }
+                }}
+                className="w-full rounded border border-neutral-300 bg-paper px-1.5 py-0.5 tabular-nums text-ink outline-none focus:border-ink"
+                title="Same page + seed + mode = same six. Edit to reproduce a batch."
+              />
+            </label>
+            <button type="button" className={btn} onClick={inspoMore} disabled={inspoBusy} title="Next batch (seed +1)">
+              More
+            </button>
+            <p className="text-[10px] leading-4 text-neutral-700">
+              {inspoBusy
+                ? `generating… ${inspoProgress.tries} tried · ${inspoProgress.passing} pass`
+                : inspoResult
+                  ? `${inspoResult.passing.length} of ${inspoResult.tries} passed`
+                  : ''}
+            </p>
+          </div>
+          <div className="flex min-w-0 flex-1 gap-3 overflow-x-auto">
+            {inspoResult?.shown.map((c, i) => (
+              <button
+                key={c.seed}
+                type="button"
+                onClick={() => applyInspo(c)}
+                className="group flex shrink-0 flex-col items-start gap-1 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-red"
+                title={`Apply ${c.seed} · ${c.archetype} (one undo step)\n${c.rules.map((r) => `${r.pass ? '✓' : '✗'} ${r.label}: ${r.detail}`).join('\n')}`}
+              >
+                <div
+                  className="overflow-hidden rounded border border-neutral-300 shadow-sm transition-[box-shadow,border-color] duration-150 group-hover:border-neutral-600 group-hover:shadow-md"
+                  style={{ width: 128, aspectRatio: `${view.w} / ${view.h}` }}
+                >
+                  <PreviewCanvas page={inspoPage(c)} ns={`-i${i}`} />
+                </div>
+                <span className="font-mono text-[9.5px] tabular-nums text-neutral-700">
+                  {c.seed} · {c.archetype} · {Math.round(c.score * 100)}
+                </span>
+              </button>
+            ))}
+            {inspoBusy &&
+              Array.from({ length: Math.max(0, 6 - (inspoResult?.shown.length ?? 0)) }).map((_, i) => (
+                <div key={`ph${i}`} className="shrink-0 animate-pulse rounded border border-dashed border-neutral-400 bg-neutral-200/60" style={{ width: 128, aspectRatio: `${view.w} / ${view.h}` }} />
+              ))}
+            {!inspoBusy && inspoResult && inspoResult.shown.length === 0 && (
+              <p className="self-center font-mono text-[11px] text-neutral-700">Nothing passed the rules for this page — try Bold, or another seed.</p>
+            )}
+            {!inspoBusy && inspoResult && inspoResult.shown.length > 0 && inspoResult.shown.length < 6 && (
+              <p className="self-center font-mono text-[10px] text-neutral-700">Only {inspoResult.shown.length} passed in {inspoResult.tries} tries.</p>
+            )}
+          </div>
+        </section>
+      )}
 
       <div className="flex min-h-0 flex-1">
         {/* ── Left pane: pages, layers, saved slots ── */}
