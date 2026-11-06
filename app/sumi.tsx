@@ -8994,7 +8994,12 @@ const subscribeWide = (cb: () => void) => {
   return () => mq.removeEventListener('change', cb)
 }
 const getWide = () => wideQuery().matches
-const getWideServer = () => false // SSR / first hydration pass: render nothing, decide on the client
+// SSR and the hydration pass can't know the width, so they render the
+// notice — but hidden by a media query at MIN_EDITOR_WIDTH and up, so a
+// wide window sees blank paper, not a flash of the message, until the
+// client snapshot mounts the editor.
+const getWideServer = () => false
+const GATE_CSS = `@media (min-width: ${MIN_EDITOR_WIDTH}px) { .pg-gate-notice { display: none } }`
 
 function DesktopOnlyNotice() {
   return (
@@ -9024,7 +9029,14 @@ export default function Sumi() {
           <SumiEditor />
         </div>
       )}
-      {!wide && <DesktopOnlyNotice />}
+      {!wide && (
+        <>
+          <style>{GATE_CSS}</style>
+          <div className="pg-gate-notice">
+            <DesktopOnlyNotice />
+          </div>
+        </>
+      )}
       {/* DialKit's floating panel — dev-only tuning (Inspo nav, Layout). */}
       <DialPanel />
     </>
