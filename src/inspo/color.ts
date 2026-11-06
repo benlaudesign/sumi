@@ -36,3 +36,12 @@ export function saturation(hex: string): number {
 }
 
 export const normHex = (c: unknown): string | null => (typeof c === 'string' && hexRgb(c) ? '#' + (hexRgb(c) as number[]).map((n) => n.toString(16).padStart(2, '0')).join('') : null)
+
+// Linear mix of two hex colours, t = 0 → a, 1 → b.
+export function mixHex(a: string, b: string, t: number): string {
+  const p = hexRgb(a)
+  const q = hexRgb(b)
+  if (!p || !q) return a
+  const k = Math.max(0, Math.min(1, t))
+  return '#' + p.map((c, i) => Math.round(c + (q[i] - c) * k).toString(16).padStart(2, '0')).join('')
+}

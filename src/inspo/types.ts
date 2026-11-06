@@ -50,6 +50,9 @@ export interface InspoContext {
   palettes: { restrained: Record<string, Palette>; expressive: Record<string, Palette> }
   // The editor's own presets — starters on an empty page are built from them.
   presets: { shape: Record<string, (p: Palette) => ElValues>; text: Record<string, (p: Palette) => ElValues> }
+  // Texture kind defaults (washi, frost, glass, screen, grain …) — the form
+  // axis swaps a background texture's kind with these.
+  textures: Record<string, (p: Palette) => ElValues>
   fonts: string[]
   subjectAllowed: boolean
   makeDefault: (type: InspoElType) => ElValues
@@ -113,6 +116,9 @@ export interface Candidate {
   els: InspoEl[]
   bg: string
   paletteName?: string // when the palette dimension picked a curated palette
+  // Which axis produced this; colour variants also carry their kind.
+  axis: 'layout' | 'colour' | 'form'
+  kind?: 'palette' | 'invert' | 'accent' | 'oneInk' | 'spot'
 }
 
 export interface RuleResult {
@@ -133,6 +139,7 @@ export interface Scored extends Candidate {
 
 export interface InspoResult {
   batchSeed: number
+  axis: 'layout' | 'colour' | 'form'
   shown: Scored[] // ordered close → far
   passing: Scored[]
   rejected: Scored[]

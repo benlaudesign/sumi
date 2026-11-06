@@ -6,7 +6,7 @@
 // Frame furniture (stamp border pieces) is never a design element here,
 // and Ma / grid / focal are judged inside the frame area.
 
-import { contrast } from './color'
+import { contrast, mixHex, normHex } from './color'
 import { axisAnchored, X_LINES, Y_LINES } from './grid'
 import { maskDifference } from './measure'
 import { RULES } from './rules'
@@ -43,6 +43,37 @@ export function elementAnchored(e: InspoEl, m: Measurement | null, area: Area): 
   const xs = [axisAnchored(c.x, mb?.x0 ?? null, mb?.x1 ?? null, xl), db ? axisAnchored(c.x, db.x0, db.x1, xl) : false]
   const ys = [axisAnchored(c.y, mb?.y0 ?? null, mb?.y1 ?? null, yl), db ? axisAnchored(c.y, db.y0, db.y1, yl) : false]
   return { x: xs.some(Boolean), y: ys.some(Boolean) }
+}
+
+// What's actually underneath an element at its ink centre: the topmost
+// lower solid element whose ink extent covers it (else the paper), veiled
+// by every texture layer below it in z-order by opacity × textureVeil.
+// Text and outlines don't form a ground.
+export function backdropFor(el: InspoEl, els: InspoEl[], m: Measurement, bg: string): string {
+  const idx = els.indexOf(el)
+  const me = m.els.find((x) => x.id === el.id)
+  const c = me ? { x: me.cx, y: me.cy } : declaredCentre(el)
+  let back = normHex(bg) ?? bg
+  for (let i = 0; i < idx; i++) {
+    const e = els[i]
+    if (e.hidden) continue
+    if (e.type === 'texture') {
+      const v = e.v
+      const x0 = Number(v.x ?? 0)
+      const y0 = Number(v.y ?? 0)
+      const x1 = x0 + Number(v.width ?? 100)
+      const y1 = y0 + Number(v.height ?? 100)
+      const tc = normHex(v.color)
+      if (tc && c.x >= x0 && c.x <= x1 && c.y >= y0 && c.y <= y1) back = mixHex(back, tc, Number(v.opacity ?? 1) * RULES.colour.textureVeil)
+      continue
+    }
+    if (e.frameFurniture || e.type === 'text' || e.v.fill === 'outline') continue
+    const col = elColor(e)
+    const bb = m.els.find((x) => x.id === e.id)?.bbox
+    if (!col || !bb) continue
+    if (c.x >= bb.x0 && c.x <= bb.x1 && c.y >= bb.y0 && c.y <= bb.y1) back = col
+  }
+  return back
 }
 
 const textKey = (els: InspoEl[]) => designEls(els).filter((e) => e.type === 'text').map((e) => String(e.v.text ?? '')).sort().join('\u0000')
@@ -132,9 +163,10 @@ export function measuredRules(c: Candidate, sig: Signature, m: Measurement, base
   const centre = { x: (area.x0 + area.x1) / 2, y: (area.y0 + area.y1) / 2 }
 
   // Difference vs the original: hard minimum for far, soft otherwise.
+  // (Hard only for far on the layout axis — colour/form keep the ink where it is.)
   const d = maskDifference(baseM, m)
   const minD = RULES.tiers.minDifference[c.tier]
-  out.push(rule('difference', `Different enough (${c.tier})`, c.tier === 'far', d >= minD, d / 0.7, `${Math.round(d * 100)}% of ink differs (min ${Math.round(minD * 100)}%)`))
+  out.push(rule('difference', `Different enough (${c.tier})`, c.axis === 'layout' && c.tier === 'far', d >= minD, d / 0.7, `${Math.round(d * 100)}% of ink differs (min ${Math.round(minD * 100)}%)`))
 
   const empty = 1 - m.coverage
   out.push(rule('ma', 'Ma ≥ 50% empty', true, empty >= RULES.ma.minEmptyRatio, (empty - RULES.ma.minEmptyRatio) / 0.3, `${Math.round(empty * 100)}% empty`))
@@ -157,15 +189,22 @@ export function measuredRules(c: Candidate, sig: Signature, m: Measurement, base
     out.push(rule('scale', 'Dominant ≥ 3× next (area)', true, ratio >= RULES.restraint.minAreaRatio, (ratio - RULES.restraint.minAreaRatio) / 5, `${ratio === Infinity ? '∞' : r1(ratio)}:1`))
   } else out.push(rule('scale', 'Dominant ≥ 3× next (area)', true, true, 1, 'single element'))
 
-  // Contrast against the candidate's own paper (far may change it).
-  const checks = [...(domEl ? [domEl] : []), ...live.filter((e) => e.type === 'text')]
+  // Contrast against what's actually underneath each (paper, a shape it
+  // sits on, through any texture veil) — not just the candidate's paper.
+  const checks = [...(domEl ? [domEl] : []), ...live.filter((e) => e.type === 'text' && e.id !== domEl?.id)]
   let minC = Infinity
+  let worst = ''
   for (const e of checks) {
     const col = elColor(e)
     if (!col) continue
-    minC = Math.min(minC, contrast(col, c.bg) ?? 21)
+    const under = backdropFor(e, c.els, m, c.bg)
+    const k = contrast(col, under) ?? 21
+    if (k < minC) {
+      minC = k
+      worst = `${e.type}#${e.id} ${col} on ${under}`
+    }
   }
-  out.push(rule('contrast', 'Contrast ≥ 4:1 (dominant, text)', true, minC >= RULES.palette.minContrast, (minC - RULES.palette.minContrast) / 8, minC === Infinity ? 'n/a' : `${r1(minC)}:1`))
+  out.push(rule('contrast', 'Contrast ≥ 4:1 (dominant, text)', true, minC >= RULES.palette.minContrast, (minC - RULES.palette.minContrast) / 8, minC === Infinity ? 'n/a' : `${r1(minC)}:1 (${worst})`))
 
   {
     const inside = RULES.typography.keepInsidePct

@@ -19,7 +19,7 @@ const CENTRE_TYPES: InspoElType[] = ['shape', 'text', 'subject']
 const isCentreType = (t: InspoElType) => CENTRE_TYPES.includes(t)
 const isBoxType = (t: InspoElType) => t === 'halftone' || t === 'ascii' || t === 'image'
 const NEW_ID_BASE = 1_000_000 // the editor remaps ids ≥ this on apply
-const JP_SANS = ['Noto Sans JP', 'Zen Kaku Gothic New']
+export const JP_SANS = ['Noto Sans JP', 'Zen Kaku Gothic New']
 
 // Rough ink "extent" (px, side of an equivalent square) — only for sizing
 // decisions in here. Real areas come from the alpha render.
@@ -210,25 +210,27 @@ function moveType(texts: InspoEl[], rng: Rng, fonts: string[]) {
   return changed
 }
 
-// Palette: a curated palette (Restrained mostly) or inverted figure/ground.
-function movePalette(els: InspoEl[], sig: Signature, rng: Rng, ctx: InspoContext): { bg: string; name?: string } {
+// Figure/ground inversion: `surface` (the accent or the darkest ink)
+// becomes the paper; figures in that colour turn paper-coloured, paper-
+// coloured figures turn ink, everything else keeps its ink.
+export function invertFigureGround(els: InspoEl[], sig: Signature, surface: string): string {
   const paper = sig.palette.paper
-  const accent = sig.palette.accent ?? normHex(ctx.palette.accent) ?? '#bc002d'
   const darkest = sig.palette.darkest
-  if (chance(rng, 0.3)) {
-    // Inverted: the accent becomes the paper, accent figures become paper-coloured, ink stays ink.
-    for (const e of els) {
-      const c = normHex(e.v.color)
-      if (!c) continue
-      if (c === accent) e.v.color = paper
-      else if (c === paper) e.v.color = darkest
-    }
-    return { bg: accent }
+  for (const e of els) {
+    const c = normHex(e.v.color)
+    if (!c) continue
+    if (c === surface) e.v.color = paper
+    else if (c === paper && surface !== darkest) e.v.color = darkest
   }
-  const group = chance(rng, 0.75) ? ctx.palettes.restrained : ctx.palettes.expressive
-  const names = Object.keys(group).filter((n) => normHex(group[n].paper) !== paper || normHex(group[n].ink) !== darkest)
-  const name = pick(rng, names.length ? names : Object.keys(group))
-  const p = group[name]
+  return surface
+}
+
+// Re-ink every element by its role in the signature (ink / accent / paper
+// / alt) from a curated palette. Returns the new paper.
+export function recolourToPalette(els: InspoEl[], sig: Signature, p: Palette): string {
+  const paper = sig.palette.paper
+  const accent = sig.palette.accent
+  const darkest = sig.palette.darkest
   const role = (c: string): keyof Palette => {
     if (c === darkest) return 'ink'
     if (c === accent) return 'accent'
@@ -241,7 +243,19 @@ function movePalette(els: InspoEl[], sig: Signature, rng: Rng, ctx: InspoContext
     if (!c) continue
     e.v.color = normHex(p[role(c)]) ?? p[role(c)]
   }
-  return { bg: normHex(p.paper) ?? p.paper, name }
+  return normHex(p.paper) ?? p.paper
+}
+
+// Palette: a curated palette (Restrained mostly) or inverted figure/ground.
+function movePalette(els: InspoEl[], sig: Signature, rng: Rng, ctx: InspoContext): { bg: string; name?: string } {
+  const paper = sig.palette.paper
+  const accent = sig.palette.accent ?? normHex(ctx.palette.accent) ?? '#bc002d'
+  const darkest = sig.palette.darkest
+  if (chance(rng, 0.3)) return { bg: invertFigureGround(els, sig, accent) }
+  const group = chance(rng, 0.75) ? ctx.palettes.restrained : ctx.palettes.expressive
+  const names = Object.keys(group).filter((n) => normHex(group[n].paper) !== paper || normHex(group[n].ink) !== darkest)
+  const name = pick(rng, names.length ? names : Object.keys(group))
+  return { bg: recolourToPalette(els, sig, group[name]), name }
 }
 
 export interface GenerateOptions {
@@ -426,7 +440,7 @@ export function generateCandidate(base: InspoPage, sig: Signature, baseM: Measur
   }
 
   const els = [...all.filter((e) => !removed.has(e.id)), ...added]
-  return { seed: `${batchSeed}·${tryIndex}`, tryIndex, archetype, tier: starter ? 'close' : opts.tier, dims: [...dims], els, bg, paletteName }
+  return { seed: `${batchSeed}·${tryIndex}`, tryIndex, archetype, tier: starter ? 'close' : opts.tier, dims: [...dims], els, bg, paletteName, axis: 'layout' }
 }
 
 export { designEls }

@@ -21,7 +21,7 @@ import { CheatSheet } from '../src/components/CheatSheet'
 import { isMacPlatform, matchShortcut, shortcutChips } from '../src/config/shortcuts'
 import { BUILTIN_FONTS, CURATED_FONTS, fontCssHref, fontLinkId } from '../src/config/fonts'
 import { MIN_EDITOR_WIDTH } from '../src/config/layout'
-import { RULES, runInspo, type InspoContext, type InspoEl, type InspoPage, type InspoResult, type Scored } from '../src/inspo'
+import { RULES, runInspo, type InspoAxis, type InspoContext, type InspoEl, type InspoPage, type InspoResult, type Scored } from '../src/inspo'
 
 // ── Canvas ────────────────────────────────────────────────────────────────
 
@@ -7010,6 +7010,7 @@ export function makeInspoCtx(palette: Palette, fonts: string[]): InspoContext {
     palette,
     palettes: { restrained: PALETTES, expressive: EXPRESSIVE_PALETTES },
     presets: { shape: SHAPE_PRESETS as unknown as Record<string, (p: Palette) => Record<string, unknown>>, text: TEXT_PRESETS as unknown as Record<string, (p: Palette) => Record<string, unknown>> },
+    textures: TEXTURE_KIND_DEFAULTS as unknown as Record<string, (p: Palette) => Record<string, unknown>>,
     fonts,
     subjectAllowed: FEATURES.subject,
     makeDefault: (type) => DEFAULTS[type](palette) as unknown as Record<string, unknown>,
@@ -12484,7 +12485,7 @@ function SumiEditor() {
   }
   const cheatOpenRef = useRef(false)
   cheatOpenRef.current = cheatOpen
-  const inspoNavRef = useRef<{ active: boolean; step: (d: -1 | 1) => void; keep: () => void; cancel: () => void; more: () => void; save: () => void; home: () => void }>({ active: false, step: () => {}, keep: () => {}, cancel: () => {}, more: () => {}, save: () => {}, home: () => {} })
+  const inspoNavRef = useRef<{ active: boolean; canBack: boolean; step: (d: -1 | 1) => void; keep: () => void; cancel: () => void; more: () => void; save: () => void; home: () => void; axis: (a: InspoAxis) => void; back: () => void }>({ active: false, canBack: false, step: () => {}, keep: () => {}, cancel: () => {}, more: () => {}, save: () => {}, home: () => {}, axis: () => {}, back: () => {} })
   const macRef = useRef(mac)
   macRef.current = mac
   const pushUndoCoalescedRef = useRef<(key: string) => void>(() => {})
@@ -12608,6 +12609,19 @@ function SumiEditor() {
         if (e.code === 'KeyR' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
           e.preventDefault()
           nv.cancel()
+          return
+        }
+        // L / C / F branch the focused thumb onto an axis; Backspace steps
+        // back along the breadcrumb (nothing is selected during a session,
+        // so Delete has nothing to do anyway).
+        if ((e.code === 'KeyL' || e.code === 'KeyC' || e.code === 'KeyF') && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+          e.preventDefault()
+          nv.axis(e.code === 'KeyL' ? 'layout' : e.code === 'KeyC' ? 'colour' : 'form')
+          return
+        }
+        if (e.code === 'Backspace' && nv.canBack) {
+          e.preventDefault()
+          nv.back()
           return
         }
         // S saves the focused candidate (never "+ Shape" during a session);
@@ -12990,7 +13004,20 @@ function SumiEditor() {
         <Section title="Surface">{surfaceCore}</Section>
 
         {/* Palette — one row; the grid lives in a popover. */}
-        <Section title="Palette">
+        <Section
+          title="Palette"
+          action={
+            <button
+              type="button"
+              onClick={() => (inspoOpen ? switchAxis('colour') : openInspo('colour'))}
+              disabled={pageIsEmpty}
+              className="font-mono text-[10px] text-white/45 transition-colors duration-100 hover:text-white/90 disabled:opacity-40 disabled:hover:text-white/45"
+              title="Colour variants of this page (Inspo)"
+            >
+              Explore colours
+            </button>
+          }
+        >
           <div className="relative px-1">
             <button
               type="button"
@@ -13157,6 +13184,14 @@ function SumiEditor() {
   // not a UI control any more — it shows in a dev tooltip and the console.
   const [inspoSeed, setInspoSeed] = useState(() => Math.floor(Math.random() * 90000) + 10000)
   const [inspoResult, setInspoResult] = useState<InspoResult | null>(null)
+  // Three axes. The current frame generates variants of `axisBase` (null =
+  // the page itself) on `inspoAxis`; switching axes branches from the
+  // focused thumb and pushes the frame so Backspace can step back with
+  // the batches and focus intact. The stack's axes form the breadcrumb.
+  const [inspoAxis, setInspoAxis] = useState<InspoAxis>('layout')
+  const [axisBase, setAxisBase] = useState<Scored | null>(null)
+  type AxisFrame = { axis: InspoAxis; base: Scored | null; batches: InspoResult[]; result: InspoResult | null; navIdx: number; seed: number }
+  const [axisStack, setAxisStack] = useState<AxisFrame[]>([])
   const [inspoBusy, setInspoBusy] = useState(false)
   const inspoRunId = useRef(0)
   const inspoCtx = useMemo(() => makeInspoCtx(palette, fontOptions), [palette, fontOptions])
@@ -13217,7 +13252,7 @@ function SumiEditor() {
   const shownBg = inspoPreview?.bg ?? bg
   const [fadeFrom, setFadeFrom] = useState<{ key: number; page: PageState } | null>(null)
 
-  const runInspoBatch = async (batchSeed: number, append = false) => {
+  const runInspoBatch = async (batchSeed: number, append = false, axis: InspoAxis = inspoAxis, from: Scored | null = axisBase) => {
     const runId = ++inspoRunId.current
     setInspoBusy(true)
     setInspoResult(null)
@@ -13232,12 +13267,14 @@ function SumiEditor() {
     }, 4000)
     // Stamp border = frame, not composition: its inset bounds Ma/grid and
     // its furniture layers pass through untouched.
-    const base: InspoPage = { els: structuredClone(els) as unknown as InspoEl[], bg, w: view.w, h: view.h, seed, frameInset: frame ? frame.inset : undefined }
+    const src = from ? candidatePatch(from) : { els, bg }
+    const base: InspoPage = { els: structuredClone(src.els) as unknown as InspoEl[], bg: src.bg, w: view.w, h: view.h, seed, frameInset: frame ? frame.inset : undefined }
     // Off the current React flush before the pipeline's own flushSync renders.
     await new Promise((r) => setTimeout(r, 0))
     const res = await runInspo({
       base,
       batchSeed,
+      axis,
       ctx: inspoCtx,
       onSlot: (slot, c) => {
         if (runId !== inspoRunId.current) return
@@ -13264,18 +13301,59 @@ function SumiEditor() {
   }
   const [inspoBaseEmpty, setInspoBaseEmpty] = useState(false)
   const pageIsEmpty = els.filter((e) => !e.hidden && !e.frameFurniture && e.type !== 'texture').length === 0
-  const openInspo = () => {
+  const openInspo = (axis: InspoAxis = 'layout') => {
     setInspoBaseEmpty(pageIsEmpty)
     setInspoOpen(true)
+    setInspoAxis(axis)
+    setAxisBase(null)
+    setAxisStack([])
     resetNav()
-    void runInspoBatch(inspoSeed)
+    void runInspoBatch(inspoSeed, false, axis, null)
   }
   const closeInspo = () => {
     inspoRunId.current++
     setInspoOpen(false)
     setInspoBusy(false)
     setInspoSlots(null)
+    setInspoAxis('layout')
+    setAxisBase(null)
+    setAxisStack([])
     resetNav()
+  }
+  // Branch the focused thumb (or this frame's base) onto an axis. The
+  // canvas keeps showing it while the new batch lands.
+  const switchAxis = (axis: InspoAxis) => {
+    const from = navCandidate(navIdx) ?? axisBase
+    if (!from && pageIsEmpty) return
+    setAxisStack((st) => [...st, { axis: inspoAxis, base: axisBase, batches: inspoBatches, result: inspoResult, navIdx, seed: inspoSeed }])
+    const next = (inspoSeed + 1) % 100000
+    setInspoSeed(next)
+    setInspoAxis(axis)
+    setAxisBase(from)
+    setNavIdx(0)
+    setFadeFrom(null)
+    setInspoPreview(from ? candidatePatch(from) : null)
+    setSelectedIds([])
+    void runInspoBatch(next, false, axis, from)
+  }
+  const axisBack = () => {
+    const fr = axisStack[axisStack.length - 1]
+    if (!fr) return
+    inspoRunId.current++
+    setAxisStack((st) => st.slice(0, -1))
+    setInspoBusy(false)
+    setInspoSlots(null)
+    setInspoAxis(fr.axis)
+    setAxisBase(fr.base)
+    setInspoBatches(fr.batches)
+    setInspoResult(fr.result)
+    setInspoSeed(fr.seed)
+    setNavIdx(fr.navIdx)
+    const shown = fr.batches.flatMap((b) => b.shown)
+    const c = fr.navIdx >= 1 ? shown[fr.navIdx - 1] ?? null : fr.base
+    setFadeFrom(null)
+    setInspoPreview(c ? candidatePatch(c) : null)
+    setSelectedIds([])
   }
   const inspoMore = () => {
     const next = (inspoSeed + 1) % 100000
@@ -13327,7 +13405,8 @@ function SumiEditor() {
   const navShow = (idx: number, fade = true) => {
     const c = navCandidate(idx)
     if (fade && nav.transitionMs > 0) setFadeFrom({ key: Date.now(), page: displayedPage() })
-    setInspoPreview(c ? candidatePatch(c) : null)
+    const shown = c ?? (idx === 0 ? axisBase : null)
+    setInspoPreview(shown ? candidatePatch(shown) : null)
     setSelectedIds([])
   }
   const navFocus = (next: number) => {
@@ -13357,7 +13436,7 @@ function SumiEditor() {
   }
   // Keep = the one undo step. Step 0 (original) just ends the session.
   const navKeep = (idx = navIdx) => {
-    const c = navCandidate(idx)
+    const c = navCandidate(idx) ?? (idx === 0 ? axisBase : null)
     setInspoPreview(null)
     setFadeFrom(null)
     if (c) applyInspo(c)
@@ -13365,7 +13444,7 @@ function SumiEditor() {
   }
   const navCancel = () => closeInspo()
   // Keeps the keydown listener (mounted once, above) pointing at fresh handlers.
-  inspoNavRef.current = { active: inspoOpen && navVariant !== 'tray', step: navStep, keep: () => navKeep(), cancel: navCancel, more: inspoMore, save: () => navSave(), home: () => navFocus(0) }
+  inspoNavRef.current = { active: inspoOpen && navVariant !== 'tray', canBack: axisStack.length > 0, step: navStep, keep: () => navKeep(), cancel: navCancel, more: inspoMore, save: () => navSave(), home: () => navFocus(0), axis: switchAxis, back: axisBack }
   // Keeps the keydown listener (mounted once, above) pointing at fresh handlers.
   inspoRef.current = {
     open: openInspo,
@@ -14923,6 +15002,9 @@ function SumiEditor() {
               Controls live here (inline cluster or header row), original is
               pinned left, batches append with a seed label between them. */}
           {filmstripOpen && (() => {
+            const AXES: { id: InspoAxis; label: string; key: string }[] = [{ id: 'layout', label: 'Layout', key: 'l' }, { id: 'colour', label: 'Colour', key: 'c' }, { id: 'form', label: 'Form', key: 'f' }]
+            const axisLabel = (a: InspoAxis) => AXES.find((x) => x.id === a)!.label
+            const crumbs = [...axisStack.map((f) => f.axis), inspoAxis]
             const controls = (
               <div className="flex shrink-0 flex-col justify-between gap-2 self-stretch pr-3" style={{ borderRight: '1px solid var(--color-neutral-300)' }} role="group" aria-label="Inspo controls">
                 <div className="flex items-center gap-1.5">
@@ -14930,6 +15012,32 @@ function SumiEditor() {
                     More<Kbd>m</Kbd>
                   </button>
                   <button type="button" className={`${btn} px-1.5 py-0.5`} onClick={navCancel} aria-label="Close Inspo (Esc)">×</button>
+                </div>
+                {/* Axis switch: branch the focused thumb onto Layout / Colour / Form.
+                    The breadcrumb above it is the path taken; Backspace steps back. */}
+                <div className="flex flex-col gap-1">
+                  <span className="font-mono text-[10px] text-neutral-500" aria-label="Inspo path">
+                    {crumbs.map((a, i) => (
+                      <Fragment key={i}>
+                        {i > 0 && <span className="mx-1" aria-hidden="true">›</span>}
+                        <span className={i === crumbs.length - 1 ? 'text-ink' : ''}>{axisLabel(a)}</span>
+                      </Fragment>
+                    ))}
+                    {axisStack.length > 0 && <span className="ml-1.5 text-neutral-400"><Kbd>⌫</Kbd> back</span>}
+                  </span>
+                  <div className="flex items-center gap-2" role="group" aria-label="Inspo axis">
+                    {AXES.map((a) => (
+                      <button
+                        key={a.id}
+                        type="button"
+                        onClick={() => switchAxis(a.id)}
+                        aria-pressed={inspoAxis === a.id}
+                        className={`flex items-center gap-1 font-mono text-[11px] transition-colors duration-100 focus:outline-none focus-visible:ring-1 focus-visible:ring-ink/40 ${inspoAxis === a.id ? 'text-ink' : 'text-neutral-500 hover:text-neutral-700'}`}
+                      >
+                        {a.label}<Kbd>{a.key}</Kbd>
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 <span
                   className={`font-mono text-[10px] tabular-nums text-neutral-700 ${navCount === 0 ? 'invisible' : ''}`}
@@ -14959,7 +15067,7 @@ function SumiEditor() {
                 onFocus={() => navShow(i)}
                 onClick={() => navKeep(i)}
                 title={DEV ? (c ? `${c.tier} · ${c.dims.join(' + ')} · ${c.seed} · score ${Math.round(c.score * 100)} (dev)` : 'The page as it is') : undefined}
-                aria-label={c ? `Keep ${c.archetype} (${c.seed})` : 'Keep the original'}
+                aria-label={c ? `Keep ${c.archetype} (${c.seed})` : axisBase ? 'Keep the base' : 'Keep the original'}
                 data-tier={c?.tier}
                 className={`group/th flex shrink-0 flex-col items-start gap-1 rounded-sm text-left transition-transform duration-150 focus:outline-none ${i === navIdx ? '-translate-y-px' : ''} ${muted ? 'opacity-70' : ''}`}
               >
@@ -14967,9 +15075,9 @@ function SumiEditor() {
                   className={`overflow-hidden rounded-sm bg-paper ${i === navIdx ? 'shadow-md ring-[1.5px] ring-ink' : 'ring-1 ring-neutral-300 group-hover/th:ring-neutral-500'}`}
                   style={{ width: thumbW, height: thumbH }}
                 >
-                  <PreviewCanvas page={c ? inspoPage(c) : currentPage()} ns={`-fs${i}`} />
+                  <PreviewCanvas page={c ? inspoPage(c) : axisBase ? inspoPage(axisBase) : currentPage()} ns={`-fs${i}`} />
                 </div>
-                <span className={`font-mono text-[10px] ${i === navIdx ? 'text-ink' : 'text-neutral-700'}`}>{c ? c.archetype : 'original'}</span>
+                <span className={`font-mono text-[10px] ${i === navIdx ? 'text-ink' : 'text-neutral-700'}`}>{c ? c.archetype : axisBase ? 'base' : 'original'}</span>
               </button>
             )
             const thumbs: React.ReactNode[] = []
@@ -14978,7 +15086,7 @@ function SumiEditor() {
                 thumbs.push(
                   <div key={`b${b.batchSeed}`} className="flex shrink-0 flex-col items-center justify-center self-stretch px-1 font-mono text-[9px] text-neutral-500" aria-hidden="true">
                     <span className="h-full w-px bg-neutral-300" />
-                    <span className="py-1 tabular-nums">{b.batchSeed}</span>
+                    {DEV && <span className="py-1 tabular-nums">{b.batchSeed}</span>}
                     <span className="h-full w-px bg-neutral-300" />
                   </div>,
                 )
@@ -14993,7 +15101,7 @@ function SumiEditor() {
                 thumbs.push(
                   <div key={`b-live`} className="flex shrink-0 flex-col items-center justify-center self-stretch px-1 font-mono text-[9px] text-neutral-500" aria-hidden="true">
                     <span className="h-full w-px bg-neutral-300" />
-                    <span className="py-1 tabular-nums">{inspoSeed}</span>
+                    {DEV && <span className="py-1 tabular-nums">{inspoSeed}</span>}
                     <span className="h-full w-px bg-neutral-300" />
                   </div>,
                 )
@@ -15020,11 +15128,13 @@ function SumiEditor() {
                     navShow(navIdx)
                   }}
                 >
-                  {/* Pinned: stays put while the batches scroll underneath. */}
-                  <div className="sticky left-0 z-10 flex shrink-0 items-stretch bg-paper pr-1" style={{ gap: nav.thumbGapPx, marginLeft: -12, paddingLeft: 12 }}>
+                  {/* Pinned: stays put while the batches scroll underneath. Solid
+                      paper the full height of the card (it eats the card's own
+                      padding) so nothing shows through behind it. */}
+                  <div className="sticky left-0 z-10 flex shrink-0 items-stretch bg-paper pr-1" style={{ gap: nav.thumbGapPx, marginLeft: -12, paddingLeft: 12, marginTop: -10, marginBottom: -10, paddingTop: 10, paddingBottom: 10, boxShadow: '8px 0 8px -4px var(--color-paper)' }}>
                     {controls}
-                    {!inspoBaseEmpty && thumb(null, 0, true)}
-                    {!inspoBaseEmpty && <div className="w-px shrink-0 self-stretch bg-neutral-300" aria-hidden="true" />}
+                    {(!inspoBaseEmpty || axisBase) && thumb(null, 0, true)}
+                    {(!inspoBaseEmpty || axisBase) && <div className="w-px shrink-0 self-stretch bg-neutral-300" aria-hidden="true" />}
                   </div>
                   {thumbs}
                   {skeletons}

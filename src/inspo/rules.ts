@@ -10,6 +10,12 @@
 // patterns and text.
 
 export type Tier = 'close' | 'mid' | 'far'
+export type ColourKind = 'palette' | 'invert' | 'accent' | 'oneInk' | 'spot'
+export type FormDimension = 'shape' | 'ink' | 'texture' | 'type'
+// The three Inspo axes: layout (composition + the four dimensions above),
+// colour (surface, palette, per-element ink) and form (shape, fill, texture,
+// type style). Each branches from the focused candidate.
+export type InspoAxis = 'layout' | 'colour' | 'form'
 export type Dimension = 'composition' | 'palette' | 'shape' | 'type' | 'subtraction'
 export const DIMENSIONS: Dimension[] = ['composition', 'palette', 'shape', 'type', 'subtraction']
 
@@ -108,7 +114,7 @@ export const RULES = {
     quarter: ['semicircle', 'circle', 'square'],
     square: ['bar', 'quarter', 'diamond'],
     bar: ['square', 'cross'],
-    diamond: ['square', 'triangle'],
+    diamond: ['square', 'triangle', 'circle', 'semicircle', 'ring'],
     triangle: ['diamond', 'quarter'],
     cross: ['bar', 'square'],
     burst: ['chrysanthemum', 'blossom', 'circle'],
@@ -143,6 +149,9 @@ export const RULES = {
     typography: 1,
     grid: 1.5,
     novelty: 1,
+    // Colour / form axes only (hard gates, no soft weight).
+    axisOnly: 0,
+    changed: 0,
   },
 
   // Diversity when picking the shown set: penalty per already-shown
@@ -150,6 +159,45 @@ export const RULES = {
   diversity: {
     sameArchetypePenalty: 0.12,
     duplicatePenalty: 0.5,
+  },
+
+  // Colour axis (C in the strip / "Explore colours"): the composition is
+  // frozen and only surface, palette and per-element ink move. Variants
+  // are tiered close → far by how much of the page's colour changes.
+  // Hard checks on the colour and form axes compare against the base; a
+  // hard rule the base itself already fails is not held against a
+  // variant (it didn't introduce the fault) — the strip is never empty
+  // because the user's own page breaks a rule.
+  colour: {
+    perBatch: { close: 2, mid: 2, far: 2 },
+    // Which variant kinds each tier draws from. accent = one element in
+    // the signature accent, rest ink; spot = one element in a new spot
+    // colour, rest ink; oneInk = everything in a single colour on paper;
+    // palette = a curated palette swap (Restrained in mid, Expressive in
+    // far); invert = figure/ground inversion (accent or ink surface).
+    kindsByTier: { close: ['accent', 'spot'], mid: ['oneInk', 'palette'], far: ['invert', 'palette'] } as Record<Tier, ColourKind[]>,
+    expressiveChance: 0.2, // a mid palette swap occasionally reaches for the Expressive register
+    // What's underneath a dominant element / text for the contrast check:
+    // the topmost lower element whose ink extent covers its centre, with
+    // every texture layer in between veiling it by opacity × this.
+    textureVeil: 0.5,
+    firstBatch: 24,
+    maxTries: 120, // no raster per try — cheap
+  },
+
+  // Form axis (F): positions, sizes and colours are frozen; a variant
+  // changes 1 (close), 2 (mid) or 3+ (far) of these dimensions.
+  form: {
+    perBatch: { close: 2, mid: 2, far: 2 },
+    dims: ['shape', 'ink', 'texture', 'type'] as FormDimension[],
+    perTier: { close: 1, mid: 2, far: 3 },
+    // Fills the ink move draws from ('dissolve' is the halftone-like one).
+    fills: ['solid', 'lines', 'dots', 'dissolve', 'outline', 'gradient'],
+    // Background texture: swap to one of these kinds, or remove it.
+    textureKinds: ['washi', 'frost', 'glass', 'screen', 'grain'],
+    textureRemoveChance: 0.3,
+    firstBatch: 24,
+    maxTries: 160,
   },
 
   generation: {

@@ -1,5 +1,6 @@
 export { RULES } from './rules'
-export type { Tier, Dimension } from './rules'
+export type { Tier, Dimension, InspoAxis, ColourKind, FormDimension } from './rules'
+export { COLOUR_LABEL } from './axes'
 export { runInspo, pickDiverse } from './run'
 export { extractSignature } from './signature'
 export { measurePage, frameArea } from './measure'
