@@ -12564,7 +12564,7 @@ function SumiEditor() {
   }
 
   const btn =
-    'rounded border border-neutral-300 bg-paper px-2 py-1 font-mono text-[11px] text-ink hover:border-neutral-500 transition-colors duration-150 disabled:opacity-40 disabled:pointer-events-none'
+    'inline-flex items-center gap-1.5 rounded border border-neutral-300 bg-paper px-2 py-1 font-mono text-[11px] text-ink hover:border-neutral-500 transition-colors duration-150 disabled:opacity-40 disabled:pointer-events-none'
 
   // ── Inspo ─────────────────────────────────────────────────────────────
   // Reads the page's signature and returns compositions that hold up
