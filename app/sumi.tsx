@@ -22,7 +22,7 @@ import { CheatSheet } from '../src/components/CheatSheet'
 import { isMacPlatform, matchShortcut, shortcutChips } from '../src/config/shortcuts'
 import { BUILTIN_FONTS, CURATED_FONTS, fontCssHref, fontLinkId } from '../src/config/fonts'
 import { MIN_EDITOR_WIDTH } from '../src/config/layout'
-import { runInspo, type InspoContext, type InspoEl, type InspoPage, type InspoResult, type Scored } from '../src/inspo'
+import { RULES, runInspo, type InspoContext, type InspoEl, type InspoPage, type InspoResult, type Scored } from '../src/inspo'
 
 // ── Canvas ────────────────────────────────────────────────────────────────
 
@@ -222,6 +222,18 @@ const ROTATE_CURSOR = encodeURIComponent(
 
 const KEYFRAMES = `
 @keyframes pg-fade-out { from { opacity: 1 } to { opacity: 0 } }
+@keyframes pg-fade-in { from { opacity: 0 } to { opacity: 1 } }
+/* Inspo skeletons: a soft diagonal highlight sweeping left → right, paper tones only. */
+@keyframes pg-shimmer { from { background-position: 200% 0 } to { background-position: -200% 0 } }
+@keyframes pg-pulse { 0%, 100% { opacity: 0.55 } 50% { opacity: 1 } }
+.pg-skeleton {
+  background: linear-gradient(105deg, #f0efec 35%, #fbfaf8 50%, #f0efec 65%);
+  background-size: 300% 100%;
+  animation: pg-shimmer 1.4s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pg-skeleton { background: #f0efec; animation: pg-pulse 1.6s ease-in-out infinite; }
+}
 @keyframes pg-rise { from { opacity: 0; transform: translateY(8px) } to { opacity: 1; transform: none } }
 /* Plain arrow everywhere in the playground — buttons, sliders, canvas… */
 [data-pg], [data-pg] * { cursor: default !important; }
@@ -13135,6 +13147,8 @@ function SumiEditor() {
   }, [filmstripOpen])
   // Filmstrip batches accumulate (More appends); other variants show the latest batch only.
   const [inspoBatches, setInspoBatches] = useState<InspoResult[]>([])
+  // The batch in flight: tier slots fill progressively (null = skeleton).
+  const [inspoSlots, setInspoSlots] = useState<(Scored | null)[] | null>(null)
   // Canvas area height, measured — the artboard fits ABOVE the strip.
   const canvasAreaRef = useRef<HTMLDivElement>(null)
   const [canvasAreaH, setCanvasAreaH] = useState(0)
@@ -13160,6 +13174,14 @@ function SumiEditor() {
     setInspoBusy(true)
     setInspoResult(null)
     if (!append) setInspoBatches([])
+    const slotCount = RULES.generation.show
+    setInspoSlots(Array<Scored | null>(slotCount).fill(null))
+    // Watchdog: skeletons must never sit there — a run with nothing after
+    // ~4s is a bug worth the page state in the console.
+    let landed = false
+    const watchdog = window.setTimeout(() => {
+      if (!landed && runId === inspoRunId.current) console.error('[inspo] bug: no candidate after 4s', { seed: batchSeed, els: structuredClone(els), bg, view, frame })
+    }, 4000)
     // Stamp border = frame, not composition: its inset bounds Ma/grid and
     // its furniture layers pass through untouched.
     const base: InspoPage = { els: structuredClone(els) as unknown as InspoEl[], bg, w: view.w, h: view.h, seed, frameInset: frame ? frame.inset : undefined }
@@ -13169,8 +13191,15 @@ function SumiEditor() {
       base,
       batchSeed,
       ctx: inspoCtx,
+      onSlot: (slot, c) => {
+        if (runId !== inspoRunId.current) return
+        landed = true
+        setInspoSlots((s) => (s ? s.map((x, k) => (k === slot ? c : x)) : s))
+      },
     })
+    window.clearTimeout(watchdog)
     if (runId !== inspoRunId.current) return
+    setInspoSlots(null)
     if (process.env.NODE_ENV !== 'production') {
       const rates = Object.entries(res.rejectionsByRule).map(([k, v]) => `${k} ${Math.round((v / res.tries) * 100)}%`).join(' · ')
       console.info(`[inspo] seed ${batchSeed}: ${res.passing.length}/${res.tries} passed · shown ${res.shown.map((c) => c.tier[0]).join('')} · rejections: ${rates || 'none'}`)
@@ -13197,6 +13226,7 @@ function SumiEditor() {
     inspoRunId.current++
     setInspoOpen(false)
     setInspoBusy(false)
+    setInspoSlots(null)
     resetNav()
   }
   const inspoMore = () => {
@@ -13233,7 +13263,8 @@ function SumiEditor() {
 
   // What the main canvas is showing right now, as a page (for the crossfade snapshot).
   const displayedPage = (): PageState => ({ els: previewEls ?? els, bg, texture, seed, w: view.w, h: view.h, bgGrad, pressGrain, overprint, frame })
-  const navShown = navVariant === 'filmstrip' ? inspoBatches.flatMap((b) => b.shown) : inspoResult?.shown ?? []
+  const landedSlots = (inspoSlots ?? []).filter((c): c is Scored => !!c)
+  const navShown = navVariant === 'filmstrip' ? [...inspoBatches.flatMap((b) => b.shown), ...landedSlots] : inspoResult?.shown ?? []
   const navCount = navShown.length
   const batchStartIdx = (bi: number) => 1 + inspoBatches.slice(0, bi).reduce((n, b) => n + b.shown.length, 0)
   const navCandidate = (idx: number): Scored | null => (idx >= 1 && idx <= navCount ? navShown[idx - 1] : null)
@@ -15094,7 +15125,7 @@ function SumiEditor() {
                   <button type="button" className={`${btn} px-1.5 py-0.5`} onClick={navCancel} aria-label="Close Inspo (Esc)">×</button>
                 </div>
                 <span
-                  className="font-mono text-[10px] tabular-nums text-neutral-700"
+                  className={`font-mono text-[10px] tabular-nums text-neutral-700 ${navCount === 0 ? 'invisible' : ''}`}
                   aria-live="polite"
                   title={inspoResult ? `seed ${inspoResult.batchSeed} · ${inspoResult.passing.length} of ${inspoResult.tries} passed (dev)` : undefined}
                 >
@@ -15106,9 +15137,10 @@ function SumiEditor() {
             // fit the strip; width follows the artboard's ratio.
             const thumbH = Math.round((nav.thumbPx * 4) / 3)
             const thumbW = Math.round((thumbH * view.w) / view.h)
-            const thumb = (c: Scored | null, i: number, muted = false) => (
+            const thumb = (c: Scored | null, i: number, muted = false, reveal = false) => (
               <button
                 key={c ? c.seed : 'original'}
+                style={reveal ? { animation: 'pg-fade-in 200ms ease-out both' } : undefined}
                 ref={(n) => {
                   thumbRefs.current[i] = n
                 }}
@@ -15145,9 +15177,31 @@ function SumiEditor() {
                 )
               b.shown.forEach((c, j) => thumbs.push(thumb(c, batchStartIdx(bi) + j)))
             })
-            const skeletons = inspoBusy
-              ? Array.from({ length: 6 }).map((_, i) => <div key={`sk${i}`} className="shrink-0 animate-pulse rounded-sm bg-neutral-200" style={{ width: thumbW, height: thumbH }} />)
-              : []
+            // The batch in flight: a landed candidate crossfades into its slot;
+            // the rest shimmer in a staggered wave.
+            const batchOffset = batchStartIdx(inspoBatches.length)
+            if (inspoSlots) {
+              let landedIdx = 0
+              if (inspoBatches.length > 0)
+                thumbs.push(
+                  <div key={`b-live`} className="flex shrink-0 flex-col items-center justify-center self-stretch px-1 font-mono text-[9px] text-neutral-500" aria-hidden="true">
+                    <span className="h-full w-px bg-neutral-300" />
+                    <span className="py-1 tabular-nums">{inspoSeed}</span>
+                    <span className="h-full w-px bg-neutral-300" />
+                  </div>,
+                )
+              inspoSlots.forEach((c, k) => {
+                if (c) thumbs.push(thumb(c, batchOffset + landedIdx++, false, true))
+                else
+                  thumbs.push(
+                    <div key={`sk${k}`} className="flex shrink-0 flex-col gap-1" aria-hidden="true">
+                      <div className="pg-skeleton shrink-0 rounded-sm" style={{ width: thumbW, height: thumbH, animationDelay: `${k * 80}ms` }} />
+                      <span className="h-[13px]" />
+                    </div>,
+                  )
+              })
+            }
+            const skeletons: React.ReactNode[] = []
             return (
               <div className="flex shrink-0 justify-center px-4 pb-4" aria-label="Inspo filmstrip">
                 {/* Floating card: hugs its content, scrolls inside, never wider than the canvas minus 32px. */}

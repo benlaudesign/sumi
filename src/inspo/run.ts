@@ -15,6 +15,10 @@ export interface RunOptions {
   batchSeed: number
   ctx: InspoContext
   onProgress?: (done: number, passing: number) => void
+  // Progressive reveal: a candidate landing in one of the `show` tier slots
+  // (close, close, mid, mid, far, far — or all close on an empty page).
+  // The final `shown` is exactly these slots, so nothing reshuffles later.
+  onSlot?: (slot: number, c: Scored) => void
   maxTries?: number
   show?: number
 }
@@ -67,7 +71,18 @@ export async function runInspo(o: RunOptions): Promise<InspoResult> {
   const passing: Scored[] = []
   const rejected: Scored[] = []
   const rejectionsByRule: Record<string, number> = {}
-  const have = (t: Tier) => passing.filter((c) => c.tier === t).length
+  // Tier slots, filled first-come (near-duplicates skipped).
+  const slotTier: Tier[] = TIERS.flatMap((t) => Array<Tier>(quota[t]).fill(t))
+  const slots: (Scored | null)[] = slotTier.map(() => null)
+  const place = (c: Scored) => {
+    const i = slots.findIndex((s, k) => s === null && slotTier[k] === c.tier)
+    if (i < 0) return false
+    if (slots.some((s) => s && similar(s, c))) return false
+    slots[i] = c
+    o.onSlot?.(i, c)
+    return true
+  }
+  const have = (t: Tier) => slots.filter((s, k) => s && slotTier[k] === t).length
   const short = () => TIERS.filter((t) => have(t) < quota[t])
   let tries = 0
   const hardCap = RULES.generation.maxTriesWidened
@@ -88,20 +103,24 @@ export async function runInspo(o: RunOptions): Promise<InspoResult> {
       const m = await measurePage(cand.els, base, ctx)
       scored = finalize(cand, [...a, ...measuredRules(cand, signature, m, baseM, area)], m)
     }
-    if (scored.pass) passing.push(scored)
-    else {
+    if (scored.pass) {
+      passing.push(scored)
+      place(scored)
+    } else {
       rejected.push(scored)
       for (const r of scored.rules) if (r.hard && !r.pass) rejectionsByRule[r.id] = (rejectionsByRule[r.id] ?? 0) + 1
     }
     o.onProgress?.(tries, passing.length)
   }
-  // Fill each tier's quota, then top up from neighbouring tiers, ordered close → far.
-  const byTier: Record<Tier, Scored[]> = { close: [], mid: [], far: [] }
-  for (const t of TIERS) byTier[t] = pickDiverse(passing.filter((c) => c.tier === t), quota[t])
-  let shown = [...byTier.close, ...byTier.mid, ...byTier.far]
-  if (shown.length < show) {
-    const rest = pickDiverse(passing.filter((c) => !shown.includes(c)), show - shown.length)
-    shown = [...shown, ...rest].sort((x, y) => TIERS.indexOf(x.tier) - TIERS.indexOf(y.tier))
+  // Top up empty slots from whatever passed (other tiers, best first).
+  const used = new Set(slots.filter((s): s is Scored => !!s))
+  const rest = pickDiverse(passing.filter((c) => !used.has(c)), slots.filter((s) => !s).length)
+  for (let k = 0; k < slots.length && rest.length; k++) {
+    if (slots[k]) continue
+    const c = rest.shift()!
+    slots[k] = c
+    o.onSlot?.(k, c)
   }
+  const shown = slots.filter((s): s is Scored => !!s)
   return { batchSeed, shown, passing, rejected, tries, rejectionsByRule, signature }
 }
