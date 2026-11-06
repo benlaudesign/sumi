@@ -10079,10 +10079,12 @@ function SumiEditor() {
     genStreak.current = false
     pushUndo()
     const v = DEFAULTS[type](palette)
-    // Nudge so stacked adds never land pixel-identical.
+    // Nudge so stacked adds never land pixel-identical — a few percent,
+    // clamped so an edge-anchored default (the tategaki column) stays on
+    // the artboard.
     if (els.length > 0) {
-      v.x = Math.round(v.x + (Math.random() - 0.5) * 36)
-      v.y = Math.round(v.y + (Math.random() - 0.5) * 28)
+      v.x = Math.min(96, Math.max(4, Math.round(v.x + (Math.random() - 0.5) * 6)))
+      v.y = Math.min(96, Math.max(4, Math.round(v.y + (Math.random() - 0.5) * 6)))
     }
     const id = nextId.current++
     setEls((list) => [...list, { id, type, v }])
