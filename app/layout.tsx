@@ -17,7 +17,7 @@ const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
-  title: 'Sumi — a design tool for Japanese aesthetics',
+  title: 'Sumi',
   description:
     'Sumi is a browser-based design tool for composing posters and layouts in a Japanese-influenced visual language — ink textures, type, and motion.',
   openGraph: {

@@ -14816,7 +14816,14 @@ function SumiEditor() {
             </ul>
             </>
           </section>
-
+          <a
+            href="https://benlau.design"
+            target="_blank"
+            rel="noopener"
+            className="mt-auto shrink-0 self-start font-mono text-[10px] text-muted no-underline transition-colors hover:text-ink hover:underline"
+          >
+            by Ben Lau ↗
+          </a>
         </aside>
         )}
 
