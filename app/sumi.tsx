@@ -1587,7 +1587,7 @@ function shadeByEdgeDistance(coverage: number[], cols: number, rows: number, sha
   const depth = chamferDistance(inside, cols, rows)
   let maxDepth = 1
   for (let i = 0; i < inside.length; i++) if (inside[i] && depth[i] > maxDepth) maxDepth = depth[i]
-  return coverage.map((c, i) => {
+  return coverage.map((_, i) => {
     if (!inside[i]) return 1
     const depthFactor = Math.min(1, depth[i] / maxDepth)
     return s * (1 - depthFactor)
@@ -2215,7 +2215,7 @@ const TEXTURE_KIND_DEFAULTS: Record<string, (p: Palette) => Patch> = {
 }
 
 // Line-motif elements are deliberate, single-purpose drawings — generative
-// moves (Randomize / Inspo) leave them alone and never create them.
+// moves (Inspo) leave them alone and never create them.
 
 // ── Portability tier — internal only, no UI badge ───────────────────────
 // A = universal SVG (plain shapes/paths/gradients/text) — imports into
