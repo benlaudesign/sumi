@@ -21,7 +21,7 @@ import { INSPO_NAV, INSPO_NAV_VARIANTS, type InspoNavVariant, type LightboxLayou
 import { CheatSheet } from '../src/components/CheatSheet'
 import { isMacPlatform, matchShortcut, shortcutChips } from '../src/config/shortcuts'
 import { BUILTIN_FONTS, CURATED_FONTS, fontCssHref, fontLinkId } from '../src/config/fonts'
-import { MIN_EDITOR_WIDTH } from '../src/config/layout'
+import { LAYOUT, LAYOUT_VARIANTS, MIN_EDITOR_WIDTH, type LayoutVariant } from '../src/config/layout'
 import { runInspo, type InspoContext, type InspoEl, type InspoMode, type InspoPage, type InspoResult, type Scored } from '../src/inspo'
 
 // ── Canvas ────────────────────────────────────────────────────────────────
@@ -8115,6 +8115,27 @@ function Section({ title, action, children }: { title: string; action?: React.Re
   )
 }
 
+// Collapsible twin of Section — same header, with a disclosure caret.
+function Fold({ title, open, onToggle, badge, children }: { title: string; open: boolean; onToggle: () => void; badge?: boolean; children: React.ReactNode }) {
+  return (
+    <div className="mb-2">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="mb-1 flex w-full items-center justify-between px-1 font-mono text-[10px] uppercase tracking-[0.18em] text-white/45 transition-colors duration-100 hover:text-white/70"
+      >
+        <span className="flex items-center gap-1.5">
+          {title}
+          {badge && <span className="h-1 w-1 rounded-full bg-[#e13834]" aria-label="active" />}
+        </span>
+        <span aria-hidden="true">{open ? '▾' : '▸'}</span>
+      </button>
+      {open && children}
+    </div>
+  )
+}
+
 const DBTN =
   'rounded border border-white/15 px-2 py-1 font-mono text-[11px] text-white/85 hover:border-white/45 transition-colors duration-150 disabled:opacity-35 disabled:pointer-events-none'
 
@@ -12769,6 +12790,294 @@ function SumiEditor() {
     })
   }
 
+
+  // ── Canvas settings (no selection): Frame, Surface, Border, Palette ──
+  // One source rendered three ways: 'full' is the original inspector;
+  // 'compact' folds the sections and shrinks the palette to a chip row;
+  // the pageleft/starter layouts render 'compact' in the LEFT sidebar.
+  const canvasSettings = (mode: 'full' | 'compact', header: boolean) => {
+    const frameBody = (
+      <>
+                {(() => {
+                  const current = CANVAS_PRESETS.find((cp) => cp.w === view.w && cp.h === view.h)
+                  return (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setFrameOpen((o) => !o)}
+                        className={`${DBTN} mx-1 flex w-[calc(100%-8px)] items-center justify-between text-left`}
+                        title="Canvas size — click to change"
+                      >
+                        <span>
+                          {current?.name ?? 'Custom'}
+                          <span className="ml-2 text-[9px] text-white/45">{view.w} × {view.h}</span>
+                        </span>
+                        <span aria-hidden="true">{frameOpen ? '▾' : '▸'}</span>
+                      </button>
+                      {frameOpen && (
+                        <>
+                          <div className="mt-1 grid grid-cols-2 gap-1 px-1">
+                            {CANVAS_PRESETS.map((cp) => (
+                              <button
+                                key={cp.name}
+                                type="button"
+                                onClick={() => setCanvasSize(cp.w, cp.h)}
+                                className={`${DBTN} text-left ${view.w === cp.w && view.h === cp.h ? 'border-white bg-white/10' : ''}`}
+                              >
+                                {cp.name}
+                                <span className="block text-[9px] text-white/45">{cp.w} × {cp.h}</span>
+                              </button>
+                            ))}
+                          </div>
+                          <div className={`${ROW} mt-1`}>
+                            <span className={ROW_LABEL}>custom</span>
+                            <input
+                              key={`w${view.w}`}
+                              type="number"
+                              defaultValue={view.w}
+                              min={50}
+                              max={4000}
+                              onBlur={(e) => setCanvasSize(Number(e.target.value), view.h)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+                              className={FIELD}
+                            />
+                            <span className="shrink-0 font-mono text-[10px] text-white/45">×</span>
+                            <input
+                              key={`h${view.h}`}
+                              type="number"
+                              defaultValue={view.h}
+                              min={50}
+                              max={4000}
+                              onBlur={(e) => setCanvasSize(view.w, Number(e.target.value))}
+                              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+                              className={FIELD}
+                            />
+                          </div>
+                          <p className="mt-1 px-1 text-[10px] leading-4 text-white/40">% based — art re-flows. Saved per page.</p>
+                        </>
+                      )}
+                    </>
+                  )
+                })()}
+      </>
+    )
+    const surfaceCore = (
+      <>
+                <div className="mb-1 flex items-center gap-1.5 px-1">
+                  {BG_CHIPS.map((c) => (
+                    <Tip key={c.hex} tip={c.name}>
+                      <button
+                      type="button"
+                      aria-label={c.name}
+                      onClick={() => { pushUndo(); setBg(c.hex) }}
+                      className={`h-6 w-6 rounded-full border ${bg === c.hex ? 'border-white' : 'border-white/20'}`}
+                      style={{ backgroundColor: c.hex }}
+                    />
+                      </Tip>
+                  ))}
+                </div>
+                <DColor label="custom" value={bg} onChange={(x) => { pushUndoCoalesced('bg'); setBg(x) }} />
+      </>
+    )
+    const printFx = (
+      <>
+                <DToggle label="texture" checked={texture} onChange={(x) => { pushUndo(); setTexture(x) }} />
+                <DToggle
+                  label="gradient"
+                  checked={bgGrad?.on ?? false}
+                  onChange={(x) => {
+                    pushUndo()
+                    setBgGrad(
+                      x
+                        ? { on: true, color2: '#e9e2d2', color3: '', mid: 0.5, angle: 90, radial: false, cx: 50, cy: 50, spread: 0.85 }
+                        : null,
+                    )
+                  }}
+                />
+                {bgGrad?.on && (
+                  <>
+                    <GradControls
+                      g={bgGrad}
+                      fallback={palette}
+                      set={(g) => { pushUndoCoalesced('bggrad'); setBgGrad((prev) => ({ on: true, color2: '#e9e2d2', angle: 90, ...(prev ?? {}), ...(g as Partial<GradV>) })) }}
+                    />
+                    <div className="mt-1 grid grid-cols-2 gap-1 px-1">
+                      {([
+                        ['Paper sky', () => { setBg('#f7f6f2'); setBgGrad({ on: true, color2: '#e6dfd0', color3: '', mid: 0.5, angle: 90, radial: false, cx: 50, cy: 50, spread: 0.85 }) }],
+                        ['Hinomaru dawn', () => { setBg('#f4e3c2'); setBgGrad({ on: true, color2: '#e88a3a', color3: '', mid: 0.5, angle: 90, radial: false, cx: 50, cy: 50, spread: 0.85 }) }],
+                        ['Sunset field', () => { setBg('#f0c93d'); setBgGrad({ on: true, color2: '#22304e', color3: '#d8432b', mid: 0.55, angle: 90, radial: false, cx: 50, cy: 50, spread: 0.85 }) }],
+                        ['Ink glow', () => { setBg('#d8386b'); setBgGrad({ on: true, color2: '#20439c', color3: '', mid: 0.5, angle: 0, radial: true, cx: 50, cy: 42, spread: 0.9 }) }],
+                      ] as const).map(([nm, fn]) => (
+                        <button key={nm} type="button" className={`${DBTN} text-left`} onClick={() => { pushUndo(); fn() }}>
+                          {nm}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+                <DToggle label="overprint" checked={overprint} onChange={(x) => { pushUndo(); setOverprint(x) }} />
+                <DSlider label="grain" value={pressGrain} onChange={(x) => { pushUndoCoalesced('grain'); setPressGrain(x) }} min={0} max={1} step={0.01} />
+      </>
+    )
+    const borderBody = (
+      <>
+                {!frame ? (
+                  <div className="px-1 py-1">
+                    <button type="button" className={DBTN} onClick={applyFrame}>
+                      Apply Stamp frame
+                    </button>
+                    <p className="mt-1.5 text-[10px] leading-4 text-white/40">
+                      Clips the composition to a perforated paper field and adds editable furniture — denomination, label, year, seal.
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between px-1 py-1">
+                      <DSelect label="preset" value={frame.preset} options={FRAME_PRESET_NAMES} onChange={(x) => updateFrame({ preset: x })} />
+                      <button
+                        type="button"
+                        title="Remove the frame — furniture pieces stay on the page as normal layers"
+                        onClick={removeFrame}
+                        className="ml-2 shrink-0 font-mono text-[9px] lowercase text-white/40 transition-colors duration-100 hover:text-white/80"
+                      >
+                        ↺ remove
+                      </button>
+                    </div>
+                    <DSlider label="perf size" value={frame.perfRadius} onChange={(n) => updateFrame({ perfRadius: n })} min={2} max={10} step={0.5} />
+                    <DSlider label="perf density" value={frame.perfSpacing} onChange={(n) => updateFrame({ perfSpacing: n })} min={10} max={40} step={1} />
+                    <DSlider label="inset" value={frame.inset} onChange={(n) => updateFrame({ inset: n })} min={4} max={80} step={1} />
+                    <DColor label="paper" value={frame.paperTone} onChange={(x) => updateFrame({ paperTone: x })} allowGradient />
+                    <p className="mb-0.5 mt-1.5 px-1 font-mono text-[9px] uppercase tracking-[0.18em] text-white/35">Furniture</p>
+                    <DToggle label="numeral" checked={frame.furnitureNumeral} onChange={(x) => setFurnitureSlot('numeral', x)} />
+                    <DToggle label="label" checked={frame.furnitureLabel} onChange={(x) => setFurnitureSlot('label', x)} />
+                    <DToggle label="year" checked={frame.furnitureYear} onChange={(x) => setFurnitureSlot('year', x)} />
+                    <DToggle label="seal" checked={frame.furnitureSeal} onChange={(x) => setFurnitureSlot('seal', x)} />
+                    <p className="mb-0.5 mt-1.5 px-1 font-mono text-[9px] uppercase tracking-[0.18em] text-white/35">Overlays</p>
+                    <DToggle label="postmark" checked={frame.postmark} onChange={(x) => updateFrame({ postmark: x })} />
+                    {frame.postmark && (
+                      <DSlider label="rotation" value={frame.postmarkRotation} onChange={(n) => updateFrame({ postmarkRotation: n })} min={-45} max={45} step={1} unit="°" />
+                    )}
+                    <DToggle label="hanko" checked={frame.hanko} onChange={(x) => updateFrame({ hanko: x })} />
+                  </>
+                )}
+      </>
+    )
+    const paletteGrid = (
+      <>
+                {(
+                  [
+                    ['Restrained', PALETTES],
+                    ['Expressive', EXPRESSIVE_PALETTES],
+                  ] as const
+                ).map(([label, group]) => (
+                  <div key={label} className="mb-3 px-1">
+                    <p className="mb-1 font-mono text-[9px] uppercase tracking-[0.18em] text-white/35">{label}</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      {Object.entries(group).map(([name, pp]) => (
+                        <button
+                          key={name}
+                          type="button"
+                          title={name}
+                          aria-label={`Palette: ${name}`}
+                          onClick={() => applyPalette(name)}
+                          className={`flex w-full flex-col gap-1.5 rounded border p-1 transition-colors duration-100 ${
+                            name === paletteName
+                              ? 'border-white ring-1 ring-white/70'
+                              : 'border-white/15 hover:border-white/40'
+                          }`}
+                        >
+                          {/* Ink panels inside a card: 2px gaps, caption below */}
+                          <span className="flex h-8 w-full" style={{ gap: 2 }}>
+                            {[pp.paper, pp.ink, pp.accent, pp.alt].map((c, i) => (
+                              <span key={i} className="h-full flex-1 rounded-[1px]" style={{ backgroundColor: c }} />
+                            ))}
+                          </span>
+                          <span className="w-full text-center font-mono text-[9px] leading-3 text-white/45">{name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                <p className="mt-0.5 px-1 text-[10px] leading-4 text-white/40">Re-inks elements; each keeps its own color dial.</p>
+      </>
+    )
+    const printActive = texture || !!bgGrad?.on || overprint || pressGrain > 0
+    const activeGroup: [string, Record<string, Palette>] = paletteName in EXPRESSIVE_PALETTES ? ['Expressive', EXPRESSIVE_PALETTES] : ['Restrained', PALETTES]
+    const paletteChips = (
+      <div className="px-1">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {Object.entries(activeGroup[1]).map(([name, pp]) => (
+            <Tip key={name} tip={name}>
+              <button
+                type="button"
+                aria-label={`Palette: ${name}`}
+                aria-pressed={name === paletteName}
+                onClick={() => applyPalette(name)}
+                className={`flex h-5 w-9 overflow-hidden rounded border transition-colors duration-100 ${name === paletteName ? 'border-white ring-1 ring-white/70' : 'border-white/15 hover:border-white/40'}`}
+                style={{ gap: 1 }}
+              >
+                {[pp.paper, pp.ink, pp.accent, pp.alt].map((c, i) => (
+                  <span key={i} className="h-full flex-1" style={{ backgroundColor: c }} />
+                ))}
+              </button>
+            </Tip>
+          ))}
+          <button type="button" onClick={() => setPaletteMore((m) => !m)} className="font-mono text-[10px] text-white/45 hover:text-white/80" aria-expanded={paletteMore}>
+            {paletteMore ? 'less' : 'more'}
+          </button>
+        </div>
+        <p className="mt-1 text-[9.5px] leading-4 text-white/40">{activeGroup[0]} · {paletteName}</p>
+      </div>
+    )
+    const head = header ? (
+      <>
+        <p className="mb-2 px-1 font-mono text-[12px] text-white">Canvas</p>
+        <p className="mb-2 px-1 text-[11px] leading-4 text-white/50">Click any element to edit it; empty canvas comes back here.</p>
+      </>
+    ) : null
+    if (mode === 'full')
+      return (
+        <>
+          {head}
+          <Section title="Frame">{frameBody}</Section>
+          <Section title="Surface">
+            {surfaceCore}
+            {/* Treatments fold away — a dot marks any active one */}
+            <button
+              type="button"
+              onClick={() => setSurfaceFxOpen((o) => !o)}
+              className="mb-0.5 mt-1 flex w-full items-center justify-between px-1 font-mono text-[10px] uppercase tracking-[0.18em] text-white/45 transition-colors duration-100 hover:text-white/70"
+            >
+              <span className="flex items-center gap-1.5">
+                Print &amp; texture
+                {printActive && <span className="h-1 w-1 rounded-full bg-[#e13834]" aria-label="active" />}
+              </span>
+              <span aria-hidden="true">{surfaceFxOpen ? '▾' : '▸'}</span>
+            </button>
+            {surfaceFxOpen && printFx}
+          </Section>
+          <Section title="Border">{borderBody}</Section>
+          <Section title="Palette">{paletteGrid}</Section>
+        </>
+      )
+    return (
+      <>
+        {head}
+        <Fold title="Frame" open={folds.frame} onToggle={() => toggleFold('frame')}>{frameBody}</Fold>
+        <Fold title="Surface" open={folds.surface} onToggle={() => toggleFold('surface')}>{surfaceCore}</Fold>
+        <Fold title="Print & texture" open={folds.print} onToggle={() => toggleFold('print')} badge={printActive || !!frame}>
+          {printFx}
+          <p className="mb-0.5 mt-2 px-1 font-mono text-[9px] uppercase tracking-[0.18em] text-white/35">Stamp frame</p>
+          {borderBody}
+        </Fold>
+        <Fold title="Palette" open={folds.palette} onToggle={() => toggleFold('palette')}>
+          {paletteChips}
+          {paletteMore && <div className="mt-2">{paletteGrid}</div>}
+        </Fold>
+      </>
+    )
+  }
+
   const btn =
     'inline-flex items-center gap-1.5 rounded border border-neutral-300 bg-paper px-2 py-1 font-mono text-[11px] text-ink hover:border-neutral-500 transition-colors duration-150 disabled:opacity-40 disabled:pointer-events-none'
 
@@ -12803,6 +13112,25 @@ function SumiEditor() {
   })
   const navVariant = nav.variant as InspoNavVariant
   const lightboxLayout = nav.lightboxLayout as LightboxLayout
+  // ── Layout variants (dev-only DialKit panel; freeze in src/config/layout.ts) ──
+  const [layoutDefault] = useState<LayoutVariant>(() => {
+    const q = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('layout') : null
+    return LAYOUT_VARIANTS.includes(q as LayoutVariant) ? (q as LayoutVariant) : LAYOUT.variant
+  })
+  const lay = useDialKit('Layout', {
+    layout: { type: 'select', options: LAYOUT_VARIANTS, default: layoutDefault },
+    inspectorTheme: { type: 'select', options: ['dark', 'light'], default: LAYOUT.inspectorTheme },
+    panelWidth: [LAYOUT.panelWidth, 260, 420, 4],
+    slideIn: { type: 'select', options: ['overlay', 'shift'], default: LAYOUT.slideIn },
+  })
+  const layoutVariant = lay.layout as LayoutVariant
+  const pageLeft = layoutVariant === 'pageleft' || layoutVariant === 'starter'
+  const inspectorLight = lay.inspectorTheme === 'light'
+  // The light theme remaps Tailwind's white token inside the panel.
+  const inspectorVars = (inspectorLight ? { '--color-white': '#2b2b2b' } : {}) as React.CSSProperties
+  const [folds, setFolds] = useState({ frame: true, surface: true, print: false, palette: false })
+  const toggleFold = (k: keyof typeof folds) => setFolds((f) => ({ ...f, [k]: !f[k] }))
+  const [paletteMore, setPaletteMore] = useState(false)
   const [navIdx, setNavIdx] = useState(0) // 0 = original, 1..n = shown candidates
   const [previewEls, setPreviewEls] = useState<El[] | null>(null)
   const [fadeFrom, setFadeFrom] = useState<{ key: number; page: PageState } | null>(null)
@@ -13890,7 +14218,7 @@ function SumiEditor() {
         </section>
       )}
 
-      <div className="flex min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1">
         {/* ── Left pane: pages, layers, saved slots ── */}
         {!uiHidden && (
         <aside className="flex w-56 shrink-0 flex-col gap-5 overflow-y-auto border-r border-neutral-300 bg-paper p-3">
@@ -13948,6 +14276,12 @@ function SumiEditor() {
               ))}
             </ul>
           </section>
+          {pageLeft && (
+            <section data-inspector="light" style={{ '--color-white': '#2b2b2b' } as React.CSSProperties}>
+              <h2 className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">Page</h2>
+              <div className="mt-1.5">{canvasSettings('compact', false)}</div>
+            </section>
+          )}
 
           <section className="min-h-0">
             <h2 className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">Layers</h2>
@@ -14442,6 +14776,54 @@ function SumiEditor() {
               />
             )}
           </svg>
+
+          {/* Starter layout: an empty page offers four presets + Inspo on the artboard. */}
+          {layoutVariant === 'starter' && els.length === 0 && !previewEls && !inspoOpen && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-6" onPointerDown={(e) => e.stopPropagation()}>
+              <p className="font-mono text-[11px] text-neutral-700">Start from</p>
+              <div className="flex flex-wrap items-start justify-center gap-3">
+                {(
+                  [
+                    ['Hinomaru', 'shape', 'Hinomaru'],
+                    ['Tategaki column', 'text', 'Tategaki column'],
+                    ['Massive character', 'text', 'Massive character'],
+                    ['Seigaiha', 'shape', 'Seigaiha'],
+                  ] as const
+                ).map(([label, type, preset]) => {
+                  const v = deepMerge(DEFAULTS[type](palette), PRESETS[type][preset](palette))
+                  return (
+                    <button
+                      key={label}
+                      type="button"
+                      onClick={() => {
+                        genStreak.current = false
+                        pushUndo()
+                        const id = nextId.current++
+                        setEls([{ id, type, v }])
+                        setSelectedIds([id])
+                      }}
+                      className="group flex w-[88px] flex-col items-center gap-1.5 rounded text-center focus:outline-none focus-visible:ring-2 focus-visible:ring-red"
+                    >
+                      <div className="w-full overflow-hidden rounded border border-neutral-300 bg-paper shadow-sm transition-[box-shadow,border-color] duration-150 group-hover:border-neutral-600 group-hover:shadow-md" style={{ aspectRatio: `${view.w} / ${view.h}` }}>
+                        <PreviewCanvas page={{ els: [{ id: 1, type, v }], bg, texture: false, seed, w: view.w, h: view.h }} ns={`-st-${preset.replace(/\s/g, '')}`} />
+                      </div>
+                      <span className="font-mono text-[10px] text-neutral-700">{label}</span>
+                    </button>
+                  )
+                })}
+                <button
+                  type="button"
+                  onClick={openInspo}
+                  className="group flex w-[88px] flex-col items-center gap-1.5 rounded text-center focus:outline-none focus-visible:ring-2 focus-visible:ring-red"
+                >
+                  <div className="flex w-full items-center justify-center rounded border border-dashed border-neutral-400 bg-paper font-mono text-[11px] text-neutral-700 transition-colors duration-150 group-hover:border-neutral-600 group-hover:text-ink" style={{ aspectRatio: `${view.w} / ${view.h}` }}>
+                    Inspo<Kbd>r</Kbd>
+                  </div>
+                  <span className="font-mono text-[10px] text-neutral-700">Let it propose</span>
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Inspo crossfade: the page that was showing fades out over the new one. */}
           {fadeFrom && (
@@ -15034,7 +15416,22 @@ function SumiEditor() {
 
         {/* ── Inspector (DialKit controls inline) ── */}
         {!uiHidden && (
-        <aside className="w-80 shrink-0 overflow-y-auto bg-[#212121] p-3">
+        <div
+          className={pageLeft && lay.slideIn === 'overlay' ? 'absolute inset-y-0 right-0 z-[60] shadow-2xl' : 'shrink-0 overflow-hidden'}
+          style={
+            pageLeft
+              ? lay.slideIn === 'overlay'
+                ? { width: lay.panelWidth, transform: selectedIds.length > 0 ? 'translateX(0)' : 'translateX(100%)', transition: 'transform 220ms ease' }
+                : { width: selectedIds.length > 0 ? lay.panelWidth : 0, transition: 'width 220ms ease' }
+              : { width: lay.panelWidth }
+          }
+          aria-hidden={pageLeft && selectedIds.length === 0}
+        >
+        <aside
+          data-inspector={lay.inspectorTheme}
+          className={`h-full shrink-0 overflow-y-auto p-3 ${inspectorLight ? 'border-l border-neutral-300 bg-paper' : 'bg-[#212121]'}`}
+          style={{ width: lay.panelWidth, ...inspectorVars }}
+        >
           {selectedIds.length > 1 ? (
             <>
               <div className="mb-3 flex items-center gap-2 px-1">
@@ -15951,233 +16348,11 @@ function SumiEditor() {
             </>
           ) : (
             <>
-              <p className="mb-2 px-1 font-mono text-[12px] text-white">Canvas</p>
-              <p className="mb-2 px-1 text-[11px] leading-4 text-white/50">Click any element to edit it; empty canvas comes back here.</p>
-
-              {/* Frame — set once per piece, so presets collapse to the pick */}
-              <Section title="Frame">
-                {(() => {
-                  const current = CANVAS_PRESETS.find((cp) => cp.w === view.w && cp.h === view.h)
-                  return (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => setFrameOpen((o) => !o)}
-                        className={`${DBTN} mx-1 flex w-[calc(100%-8px)] items-center justify-between text-left`}
-                        title="Canvas size — click to change"
-                      >
-                        <span>
-                          {current?.name ?? 'Custom'}
-                          <span className="ml-2 text-[9px] text-white/45">{view.w} × {view.h}</span>
-                        </span>
-                        <span aria-hidden="true">{frameOpen ? '▾' : '▸'}</span>
-                      </button>
-                      {frameOpen && (
-                        <>
-                          <div className="mt-1 grid grid-cols-2 gap-1 px-1">
-                            {CANVAS_PRESETS.map((cp) => (
-                              <button
-                                key={cp.name}
-                                type="button"
-                                onClick={() => setCanvasSize(cp.w, cp.h)}
-                                className={`${DBTN} text-left ${view.w === cp.w && view.h === cp.h ? 'border-white bg-white/10' : ''}`}
-                              >
-                                {cp.name}
-                                <span className="block text-[9px] text-white/45">{cp.w} × {cp.h}</span>
-                              </button>
-                            ))}
-                          </div>
-                          <div className={`${ROW} mt-1`}>
-                            <span className={ROW_LABEL}>custom</span>
-                            <input
-                              key={`w${view.w}`}
-                              type="number"
-                              defaultValue={view.w}
-                              min={50}
-                              max={4000}
-                              onBlur={(e) => setCanvasSize(Number(e.target.value), view.h)}
-                              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-                              className={FIELD}
-                            />
-                            <span className="shrink-0 font-mono text-[10px] text-white/45">×</span>
-                            <input
-                              key={`h${view.h}`}
-                              type="number"
-                              defaultValue={view.h}
-                              min={50}
-                              max={4000}
-                              onBlur={(e) => setCanvasSize(view.w, Number(e.target.value))}
-                              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
-                              className={FIELD}
-                            />
-                          </div>
-                          <p className="mt-1 px-1 text-[10px] leading-4 text-white/40">% based — art re-flows. Saved per page.</p>
-                        </>
-                      )}
-                    </>
-                  )
-                })()}
-              </Section>
-
-              {/* Surface — what the composition sits on, printing included */}
-              <Section title="Surface">
-                <div className="mb-1 flex items-center gap-1.5 px-1">
-                  {BG_CHIPS.map((c) => (
-                    <Tip key={c.hex} tip={c.name}>
-                      <button
-                      type="button"
-                      aria-label={c.name}
-                      onClick={() => { pushUndo(); setBg(c.hex) }}
-                      className={`h-6 w-6 rounded-full border ${bg === c.hex ? 'border-white' : 'border-white/20'}`}
-                      style={{ backgroundColor: c.hex }}
-                    />
-                      </Tip>
-                  ))}
-                </div>
-                <DColor label="custom" value={bg} onChange={(x) => { pushUndoCoalesced('bg'); setBg(x) }} />
-                {/* Treatments fold away — a dot marks any active one */}
-                <button
-                  type="button"
-                  onClick={() => setSurfaceFxOpen((o) => !o)}
-                  className="mb-0.5 mt-1 flex w-full items-center justify-between px-1 font-mono text-[10px] uppercase tracking-[0.18em] text-white/45 transition-colors duration-100 hover:text-white/70"
-                >
-                  <span className="flex items-center gap-1.5">
-                    Print &amp; texture
-                    {(texture || bgGrad?.on || overprint || pressGrain > 0) && (
-                      <span className="h-1 w-1 rounded-full bg-[#e13834]" aria-label="active" />
-                    )}
-                  </span>
-                  <span aria-hidden="true">{surfaceFxOpen ? '▾' : '▸'}</span>
-                </button>
-                {surfaceFxOpen && (
-                <>
-                <DToggle label="texture" checked={texture} onChange={(x) => { pushUndo(); setTexture(x) }} />
-                <DToggle
-                  label="gradient"
-                  checked={bgGrad?.on ?? false}
-                  onChange={(x) => {
-                    pushUndo()
-                    setBgGrad(
-                      x
-                        ? { on: true, color2: '#e9e2d2', color3: '', mid: 0.5, angle: 90, radial: false, cx: 50, cy: 50, spread: 0.85 }
-                        : null,
-                    )
-                  }}
-                />
-                {bgGrad?.on && (
-                  <>
-                    <GradControls
-                      g={bgGrad}
-                      fallback={palette}
-                      set={(g) => { pushUndoCoalesced('bggrad'); setBgGrad((prev) => ({ on: true, color2: '#e9e2d2', angle: 90, ...(prev ?? {}), ...(g as Partial<GradV>) })) }}
-                    />
-                    <div className="mt-1 grid grid-cols-2 gap-1 px-1">
-                      {([
-                        ['Paper sky', () => { setBg('#f7f6f2'); setBgGrad({ on: true, color2: '#e6dfd0', color3: '', mid: 0.5, angle: 90, radial: false, cx: 50, cy: 50, spread: 0.85 }) }],
-                        ['Hinomaru dawn', () => { setBg('#f4e3c2'); setBgGrad({ on: true, color2: '#e88a3a', color3: '', mid: 0.5, angle: 90, radial: false, cx: 50, cy: 50, spread: 0.85 }) }],
-                        ['Sunset field', () => { setBg('#f0c93d'); setBgGrad({ on: true, color2: '#22304e', color3: '#d8432b', mid: 0.55, angle: 90, radial: false, cx: 50, cy: 50, spread: 0.85 }) }],
-                        ['Ink glow', () => { setBg('#d8386b'); setBgGrad({ on: true, color2: '#20439c', color3: '', mid: 0.5, angle: 0, radial: true, cx: 50, cy: 42, spread: 0.9 }) }],
-                      ] as const).map(([nm, fn]) => (
-                        <button key={nm} type="button" className={`${DBTN} text-left`} onClick={() => { pushUndo(); fn() }}>
-                          {nm}
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
-                <DToggle label="overprint" checked={overprint} onChange={(x) => { pushUndo(); setOverprint(x) }} />
-                <DSlider label="grain" value={pressGrain} onChange={(x) => { pushUndoCoalesced('grain'); setPressGrain(x) }} min={0} max={1} step={0.01} />
-                </>
-                )}
-              </Section>
-
-              {/* Border — the Frame system (clip + decorative edge +
-                  furniture). Labelled "Border" in the UI, not "Frame", so it
-                  doesn't collide with the canvas-size picker above (which
-                  this tool already calls Frame). One frame per page. */}
-              <Section title="Border">
-                {!frame ? (
-                  <div className="px-1 py-1">
-                    <button type="button" className={DBTN} onClick={applyFrame}>
-                      Apply Stamp frame
-                    </button>
-                    <p className="mt-1.5 text-[10px] leading-4 text-white/40">
-                      Clips the composition to a perforated paper field and adds editable furniture — denomination, label, year, seal.
-                    </p>
-                  </div>
-                ) : (
-                  <>
-                    <div className="flex items-center justify-between px-1 py-1">
-                      <DSelect label="preset" value={frame.preset} options={FRAME_PRESET_NAMES} onChange={(x) => updateFrame({ preset: x })} />
-                      <button
-                        type="button"
-                        title="Remove the frame — furniture pieces stay on the page as normal layers"
-                        onClick={removeFrame}
-                        className="ml-2 shrink-0 font-mono text-[9px] lowercase text-white/40 transition-colors duration-100 hover:text-white/80"
-                      >
-                        ↺ remove
-                      </button>
-                    </div>
-                    <DSlider label="perf size" value={frame.perfRadius} onChange={(n) => updateFrame({ perfRadius: n })} min={2} max={10} step={0.5} />
-                    <DSlider label="perf density" value={frame.perfSpacing} onChange={(n) => updateFrame({ perfSpacing: n })} min={10} max={40} step={1} />
-                    <DSlider label="inset" value={frame.inset} onChange={(n) => updateFrame({ inset: n })} min={4} max={80} step={1} />
-                    <DColor label="paper" value={frame.paperTone} onChange={(x) => updateFrame({ paperTone: x })} allowGradient />
-                    <p className="mb-0.5 mt-1.5 px-1 font-mono text-[9px] uppercase tracking-[0.18em] text-white/35">Furniture</p>
-                    <DToggle label="numeral" checked={frame.furnitureNumeral} onChange={(x) => setFurnitureSlot('numeral', x)} />
-                    <DToggle label="label" checked={frame.furnitureLabel} onChange={(x) => setFurnitureSlot('label', x)} />
-                    <DToggle label="year" checked={frame.furnitureYear} onChange={(x) => setFurnitureSlot('year', x)} />
-                    <DToggle label="seal" checked={frame.furnitureSeal} onChange={(x) => setFurnitureSlot('seal', x)} />
-                    <p className="mb-0.5 mt-1.5 px-1 font-mono text-[9px] uppercase tracking-[0.18em] text-white/35">Overlays</p>
-                    <DToggle label="postmark" checked={frame.postmark} onChange={(x) => updateFrame({ postmark: x })} />
-                    {frame.postmark && (
-                      <DSlider label="rotation" value={frame.postmarkRotation} onChange={(n) => updateFrame({ postmarkRotation: n })} min={-45} max={45} step={1} unit="°" />
-                    )}
-                    <DToggle label="hanko" checked={frame.hanko} onChange={(x) => updateFrame({ hanko: x })} />
-                  </>
-                )}
-              </Section>
-
-              {/* Palette — registers as card grids, two per row */}
-              <Section title="Palette">
-                {(
-                  [
-                    ['Restrained', PALETTES],
-                    ['Expressive', EXPRESSIVE_PALETTES],
-                  ] as const
-                ).map(([label, group]) => (
-                  <div key={label} className="mb-3 px-1">
-                    <p className="mb-1 font-mono text-[9px] uppercase tracking-[0.18em] text-white/35">{label}</p>
-                    <div className="grid grid-cols-2 gap-2">
-                      {Object.entries(group).map(([name, pp]) => (
-                        <button
-                          key={name}
-                          type="button"
-                          title={name}
-                          aria-label={`Palette: ${name}`}
-                          onClick={() => applyPalette(name)}
-                          className={`flex w-full flex-col gap-1.5 rounded border p-1 transition-colors duration-100 ${
-                            name === paletteName
-                              ? 'border-white ring-1 ring-white/70'
-                              : 'border-white/15 hover:border-white/40'
-                          }`}
-                        >
-                          {/* Ink panels inside a card: 2px gaps, caption below */}
-                          <span className="flex h-8 w-full" style={{ gap: 2 }}>
-                            {[pp.paper, pp.ink, pp.accent, pp.alt].map((c, i) => (
-                              <span key={i} className="h-full flex-1 rounded-[1px]" style={{ backgroundColor: c }} />
-                            ))}
-                          </span>
-                          <span className="w-full text-center font-mono text-[9px] leading-3 text-white/45">{name}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-                <p className="mt-0.5 px-1 text-[10px] leading-4 text-white/40">Re-inks elements; each keeps its own color dial.</p>
-              </Section>
+              {canvasSettings(layoutVariant === 'compact' ? 'compact' : 'full', true)}
             </>
           )}
         </aside>
+        </div>
         )}
       </div>
 

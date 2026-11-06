@@ -73,3 +73,10 @@ g[data-locked] * {
   outline: 2px solid var(--color-red);
   outline-offset: 2px;
 }
+
+/* Light inspector theme (dev-only Layout dial): the panel remaps Tailwind's
+   white token to ink, so every white-derived utility flips; the one
+   hard-coded field background follows here. */
+[data-inspector="light"] .bg-\[\#2a2a2a\] {
+  background-color: #f6f6f6;
+}
