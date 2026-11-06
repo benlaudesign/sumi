@@ -13164,7 +13164,8 @@ function SumiEditor() {
   // ── Inspo navigation variants (dev-only DialKit panel; freeze the winner
   // in src/config/inspoNav.ts). ?nav=<variant> seeds the select for
   // recordings. Previewing swaps what the main canvas RENDERS
-  // (previewEls) and never touches undo; only keep/apply pushes one step.
+  // (inspoPreview: the candidate's page state) and never touches undo or
+  // autosave; only keep/apply commits it.
   const [navDefault] = useState<InspoNavVariant>(() => {
     const q = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('nav') : null
     return INSPO_NAV_VARIANTS.includes(q as InspoNavVariant) ? (q as InspoNavVariant) : INSPO_NAV.variant
@@ -13208,7 +13209,12 @@ function SumiEditor() {
   const [stampOpen, setStampOpen] = useState(true)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [navIdx, setNavIdx] = useState(0) // 0 = original, 1..n = shown candidates
-  const [previewEls, setPreviewEls] = useState<El[] | null>(null)
+  // Everything a candidate changes on the page — the same patch keep
+  // commits and the canvas renders while previewing.
+  type CandidatePatch = Pick<PageState, 'els' | 'bg'>
+  const [inspoPreview, setInspoPreview] = useState<CandidatePatch | null>(null)
+  const shownEls = inspoPreview?.els ?? els
+  const shownBg = inspoPreview?.bg ?? bg
   const [fadeFrom, setFadeFrom] = useState<{ key: number; page: PageState } | null>(null)
 
   const runInspoBatch = async (batchSeed: number, append = false) => {
@@ -13253,7 +13259,7 @@ function SumiEditor() {
 
   const resetNav = () => {
     setNavIdx(0)
-    setPreviewEls(null)
+    setInspoPreview(null)
     setFadeFrom(null)
   }
   const [inspoBaseEmpty, setInspoBaseEmpty] = useState(false)
@@ -13282,29 +13288,35 @@ function SumiEditor() {
       void runInspoBatch(next)
     }
   }
+  // The page-level state a candidate carries. The generator only ever
+  // changes elements (incl. their colours/fonts/positions) and the surface
+  // colour; texture, gradient, press grain, overprint, frame and size are
+  // the current page's and pass through untouched.
+  const candidatePatch = (c: Scored): CandidatePatch => ({ els: c.els as unknown as El[], bg: c.bg })
   const applyInspo = (c: Scored) => {
     beginGenerative()
     pushUndo()
+    const patch = candidatePatch(c)
     // Elements the generator added carry provisional ids (≥ 1e6) — give
     // them real ones from this page's counter.
     const idMap = new Map<number, number>()
-    const next = (structuredClone(c.els) as unknown as El[]).map((e) => {
+    const next = (structuredClone(patch.els) as El[]).map((e) => {
       if (e.id < 1_000_000) return e
       const id = nextId.current++
       idMap.set(e.id, id)
       return { ...e, id }
     })
     setEls(next)
-    if (c.bg !== bg) setBg(c.bg)
+    if (patch.bg !== bg) setBg(patch.bg)
     const domId = c.measurement?.dominantId ?? null
     const sel = domId === null ? null : idMap.get(domId) ?? domId
     setSelectedIds(sel !== null && next.some((e) => e.id === sel) ? [sel] : [])
     flash(`Inspo ${c.seed} · ${c.archetype}`)
   }
-  const inspoPage = (c: Scored): PageState => ({ els: c.els as unknown as El[], bg: c.bg, texture, seed, w: view.w, h: view.h, bgGrad, pressGrain, overprint, frame })
+  const inspoPage = (c: Scored): PageState => ({ ...candidatePatch(c), texture, seed, w: view.w, h: view.h, bgGrad, pressGrain, overprint, frame })
 
   // What the main canvas is showing right now, as a page (for the crossfade snapshot).
-  const displayedPage = (): PageState => ({ els: previewEls ?? els, bg, texture, seed, w: view.w, h: view.h, bgGrad, pressGrain, overprint, frame })
+  const displayedPage = (): PageState => ({ els: shownEls, bg: shownBg, texture, seed, w: view.w, h: view.h, bgGrad, pressGrain, overprint, frame })
   const landedSlots = (inspoSlots ?? []).filter((c): c is Scored => !!c)
   const navShown = navVariant === 'filmstrip' ? [...inspoBatches.flatMap((b) => b.shown), ...landedSlots] : inspoResult?.shown ?? []
   const navCount = navShown.length
@@ -13315,7 +13327,7 @@ function SumiEditor() {
   const navShow = (idx: number, fade = true) => {
     const c = navCandidate(idx)
     if (fade && nav.transitionMs > 0) setFadeFrom({ key: Date.now(), page: displayedPage() })
-    setPreviewEls(c ? (c.els as unknown as El[]) : null)
+    setInspoPreview(c ? candidatePatch(c) : null)
     setSelectedIds([])
   }
   const navFocus = (next: number) => {
@@ -13346,7 +13358,7 @@ function SumiEditor() {
   // Keep = the one undo step. Step 0 (original) just ends the session.
   const navKeep = (idx = navIdx) => {
     const c = navCandidate(idx)
-    setPreviewEls(null)
+    setInspoPreview(null)
     setFadeFrom(null)
     if (c) applyInspo(c)
     closeInspo()
@@ -14419,8 +14431,8 @@ function SumiEditor() {
             className="shadow-[0_12px_40px_rgba(0,0,0,0.14)]"
             style={{ width: '100%', height: '100%', display: 'block' }}
           >
-            {bgGrad?.on && <GradDef id="pg-bggrad" from={bg} g={bgGrad} />}
-            <rect width={view.w} height={view.h} fill={bgGrad?.on ? 'url(#pg-bggrad)' : bg} onPointerDown={startMarquee} />
+            {bgGrad?.on && <GradDef id="pg-bggrad" from={shownBg} g={bgGrad} />}
+            <rect width={view.w} height={view.h} fill={bgGrad?.on ? 'url(#pg-bggrad)' : shownBg} onPointerDown={startMarquee} />
             {texture && (
               <>
                 <filter id="pg-paper">
@@ -14431,16 +14443,15 @@ function SumiEditor() {
               </>
             )}
             {frame && <FrameRender frame={frame} view={view} />}
-            {(previewEls ?? els).map((e, i) => {
+            {shownEls.map((e, i) => {
               if (e.hidden) return null
-              const shownEls = previewEls ?? els
               const props = {
                 el: e, seed, gRef, reportCap, mReg, aReg, sReg, tsReg, subjectLookup, sSilhouetteReg, staticSilhouetteLookup,
                 // A previewed candidate is look-only: no drag, no inline edit.
-                onDown: previewEls ? () => {} : (ev: React.PointerEvent, id: number) => startDrag(ev, id, 'move'),
-                onEdit: previewEls ? () => {} : openTextEditor,
+                onDown: inspoPreview ? () => {} : (ev: React.PointerEvent, id: number) => startDrag(ev, id, 'move'),
+                onEdit: inspoPreview ? () => {} : openTextEditor,
                 belowIds: shownEls.slice(0, i).filter((x) => !x.hidden).map((x) => x.id),
-                bg,
+                bg: shownBg,
                 view,
                 press: overprint,
                 clipId: frame && !e.frameFurniture ? 'pg-frameclip' : undefined,
@@ -14544,7 +14555,7 @@ function SumiEditor() {
                     in="n"
                     type="matrix"
                     values={(() => {
-                      const [pr, pg2, pb] = hexRgb01(bg)
+                      const [pr, pg2, pb] = hexRgb01(shownBg)
                       const a = r2(0.35 * pressGrain)
                       return `0 0 0 0 ${r2(pr)}  0 0 0 0 ${r2(pg2)}  0 0 0 0 ${r2(pb)}  ${a} ${a} ${a} 0 -0.18`
                     })()}
