@@ -1220,6 +1220,8 @@ interface TextRange {
   bold?: boolean
   color?: string
   bg?: string
+  dots?: boolean // emphasis dots (filled sesame) above / beside each glyph
+  sideLine?: boolean // underline (horizontal) / right-side line (vertical)
 }
 
 // One emphasis span per layer — a substring that gets a hand-drawn ink
@@ -1236,10 +1238,6 @@ interface EmphasisSpan {
   easing: string // 'settle' | 'ink' | 'linear' | 'cut'
   rest: number // ma 間 — held after the LAYER's own entrance completes, before this draws
 }
-
-const defEmphasis = (color: string): EmphasisSpan => ({
-  start: 0, end: 0, treatment: 'underline', color, duration: 1, easing: 'ink', rest: 1,
-})
 
 interface TextV {
   text: string
@@ -4934,6 +4932,28 @@ interface RangeStyle {
   bold?: boolean
   color?: string
   bg?: string
+  dots?: boolean
+  sideLine?: boolean
+}
+const RANGE_PROPS = ['bold', 'color', 'bg', 'dots', 'sideLine'] as const
+type RangeProp = (typeof RANGE_PROPS)[number]
+const sameStyle = (a: RangeStyle, b: RangeStyle) => RANGE_PROPS.every((k) => a[k] === b[k])
+
+// Per-character styles back into minimal ranges.
+function rangesFromPerChar(per: RangeStyle[]): TextRange[] {
+  const out: TextRange[] = []
+  per.forEach((st, i) => {
+    const prev = out[out.length - 1]
+    if (prev && prev.end === i && sameStyle(prev, st)) prev.end = i + 1
+    else out.push({ start: i, end: i + 1, ...st })
+  })
+  return out
+    .filter((r) => RANGE_PROPS.some((k) => r[k]))
+    .map((r) => {
+      const c: TextRange = { start: r.start, end: r.end }
+      for (const k of RANGE_PROPS) if (r[k]) (c as unknown as Record<string, unknown>)[k] = r[k]
+      return c
+    })
 }
 
 function segmentText(text: string, ranges: TextRange[]): { start: number; end: number; s: RangeStyle }[] {
@@ -4941,30 +4961,33 @@ function segmentText(text: string, ranges: TextRange[]): { start: number; end: n
   const per: RangeStyle[] = Array.from({ length: n }, () => ({}))
   for (const r of ranges) {
     for (let i = Math.max(0, r.start); i < Math.min(n, r.end); i++) {
-      if (r.bold !== undefined) per[i].bold = r.bold
-      if (r.color !== undefined) per[i].color = r.color
-      if (r.bg !== undefined) per[i].bg = r.bg
+      for (const k of RANGE_PROPS) if (r[k] !== undefined) (per[i] as Record<string, unknown>)[k] = r[k]
     }
   }
   const segs: { start: number; end: number; s: RangeStyle }[] = []
   for (let i = 0; i < n; i++) {
     const prev = segs[segs.length - 1]
-    if (prev && prev.s.bold === per[i].bold && prev.s.color === per[i].color && prev.s.bg === per[i].bg) prev.end = i + 1
+    if (prev && sameStyle(prev.s, per[i])) prev.end = i + 1
     else segs.push({ start: i, end: i + 1, s: { ...per[i] } })
   }
   return segs
 }
 
 function normalizeRanges(text: string, ranges: TextRange[]): TextRange[] {
-  return segmentText(text, ranges)
-    .filter((s) => s.s.bold || s.s.color || s.s.bg)
-    .map((s) => ({
-      start: s.start,
-      end: s.end,
-      ...(s.s.bold ? { bold: true } : {}),
-      ...(s.s.color ? { color: s.s.color } : {}),
-      ...(s.s.bg ? { bg: s.s.bg } : {}),
-    }))
+  return rangesFromPerChar(segmentText(text, ranges).flatMap((s) => Array.from({ length: s.end - s.start }, () => s.s)))
+}
+
+// Stored emphasis spans (the old animated underline / wash) fold into the
+// per-character marks: underline → side line; wash is dropped.
+function migrateEmphasis(els: El[]): El[] {
+  return els.map((e) => {
+    if (e.type !== 'text') return e
+    const v = e.v as TextV
+    if (!v.emphasis) return e
+    const { emphasis, ...rest } = v
+    const ranges = emphasis.treatment === 'underline' && emphasis.end > emphasis.start ? normalizeRanges(v.text, [...(v.ranges ?? []), { start: emphasis.start, end: emphasis.end, sideLine: true }]) : v.ranges
+    return { ...e, v: { ...rest, ranges } as TextV }
+  })
 }
 
 // Contiguous same-color background runs — merged across bold/color splits so
@@ -4999,6 +5022,7 @@ function TextEl({ el, onDown, onEdit, gRef, view, ns = '', press = false, mReg, 
   const ranges = v.ranges ?? []
   const rangesKey = JSON.stringify(ranges)
   const hasBg = ranges.some((r) => r.bg)
+  const hasMarks = ranges.some((r) => r.dots || r.sideLine)
   // Emphasis spans only support the common case — horizontal, single (not
   // repeated) text — same scope limit as the rest of this render path
   // drawing a clean line: vertical/repeated text has no single sensible
@@ -5009,12 +5033,16 @@ function TextEl({ el, onDown, onEdit, gRef, view, ns = '', press = false, mReg, 
   const [hlBox, setHlBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   const [bgBoxes, setBgBoxes] = useState<{ x: number; y: number; w: number; h: number; color: string }[]>([])
   const [spanLines, setSpanLines] = useState<{ x: number; w: number; centerY: number; top: number; bottom: number }[]>([])
+  // Per-character marks (dots / side line), from real glyph extents so
+  // they follow kerning, tracking and tategaki. Drawn as plain shapes, so
+  // the preview and the SVG export carry them too.
+  const [marks, setMarks] = useState<({ kind: 'dot'; x: number; y: number; r: number; color: string } | { kind: 'line'; x1: number; y1: number; x2: number; y2: number; w: number; color: string })[]>([])
 
   // Highlight blocks need the glyphs' real bounds — measure after render and
   // re-measure once webfonts finish loading (metrics shift). Range
   // backgrounds union per-glyph extents, so they track vertical text too.
   useLayoutEffect(() => {
-    if (hl === 'none' && !hasBg && !stampOn && !span) return // stale boxes are fine — render ignores them
+    if (hl === 'none' && !hasBg && !stampOn && !span && !hasMarks) return // stale boxes are fine — render ignores them
     let raf = 0
     const measure = () => {
       const n = textRef.current
@@ -5034,10 +5062,51 @@ function TextEl({ el, onDown, onEdit, gRef, view, ns = '', press = false, mReg, 
         // span measurement further down.
         let total = 0
         const rIdx: number[] = []
-        if (hasBg || span) {
+        if (hasBg || span || hasMarks) {
           total = n.getNumberOfChars()
           let ri = 0
           for (const ch of v.text) rIdx.push(ch === '\n' ? -1 : ri++)
+        }
+        if (hasMarks) {
+          const out: typeof marks = []
+          const dotR = Math.max(1, v.size * 0.085)
+          const dotOff = v.size * 0.16
+          const lineOff = v.size * 0.1
+          const lineW = Math.max(0.8, v.size * 0.045)
+          const extent = (i: number) => {
+            const k = i < rIdx.length ? rIdx[i] : -1
+            return k < 0 || k >= total ? null : n.getExtentOfChar(k)
+          }
+          for (const sg of segmentText(v.text, ranges)) {
+            if (!sg.s.dots && !sg.s.sideLine) continue
+            const color = sg.s.color ?? v.color
+            if (sg.s.dots)
+              for (let i = sg.start; i < sg.end; i++) {
+                const r = extent(i)
+                if (!r) continue
+                out.push(v.vertical ? { kind: 'dot', x: r.x + r.width + dotOff, y: r.y + r.height / 2, r: dotR, color } : { kind: 'dot', x: r.x + r.width / 2, y: r.y - dotOff, r: dotR, color })
+              }
+            if (sg.s.sideLine) {
+              // One line per run, never across a newline.
+              let a = sg.start
+              for (let i = sg.start; i <= sg.end; i++) {
+                if (i === sg.end || v.text[i] === '\n') {
+                  let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity
+                  for (let j = a; j < i; j++) {
+                    const r = extent(j)
+                    if (!r) continue
+                    x1 = Math.min(x1, r.x)
+                    y1 = Math.min(y1, r.y)
+                    x2 = Math.max(x2, r.x + r.width)
+                    y2 = Math.max(y2, r.y + r.height)
+                  }
+                  if (x2 > x1) out.push(v.vertical ? { kind: 'line', x1: x2 + lineOff, y1, x2: x2 + lineOff, y2, w: lineW, color } : { kind: 'line', x1, y1: y2 + lineOff, x2, y2: y2 + lineOff, w: lineW, color })
+                  a = i + 1
+                }
+              }
+            }
+          }
+          setMarks((prev) => (JSON.stringify(prev) === JSON.stringify(out) ? prev : out))
         }
         if (hasBg) {
           const boxes: { x: number; y: number; w: number; h: number; color: string }[] = []
@@ -5109,7 +5178,7 @@ function TextEl({ el, onDown, onEdit, gRef, view, ns = '', press = false, mReg, 
       document.fonts?.removeEventListener('loadingdone', measure)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hl, hasBg, stampOn, span, spanKey, v.text, rangesKey, v.font, v.size, v.weight, v.tracking, v.lineHeight, v.vertical, v.x, v.y, view.w, view.h])
+  }, [hl, hasBg, hasMarks, stampOn, span, spanKey, v.text, rangesKey, v.font, v.size, v.weight, v.tracking, v.lineHeight, v.vertical, v.x, v.y, view.w, view.h, v.color])
 
   // Register this span's per-line widths for the shared motion clock
   // (applyMotion, live; the exporters) — same registry pattern AsciiEl
@@ -5187,6 +5256,17 @@ function TextEl({ el, onDown, onEdit, gRef, view, ns = '', press = false, mReg, 
             />
           )
         })}
+        {hasMarks && marks.length > 0 && (
+          <g transform={`rotate(${r2(v.rotation)} ${r2(cx)} ${r2(cy)})`}>
+            {marks.map((m, i) =>
+              m.kind === 'dot' ? (
+                <circle key={i} cx={r2(m.x)} cy={r2(m.y)} r={r2(m.r)} fill={m.color} />
+              ) : (
+                <line key={i} x1={r2(m.x1)} y1={r2(m.y1)} x2={r2(m.x2)} y2={r2(m.y2)} stroke={m.color} strokeWidth={r2(m.w)} strokeLinecap="round" />
+              ),
+            )}
+          </g>
+        )}
         {/* Emphasis — highlight treatment: a wash swath behind the span,
             one per wrapped line. Reuses the real wash-material construction
             (turbulence-displaced mask + radial density gradient + bleed
@@ -8953,6 +9033,7 @@ function bootPages(p: Palette): { pages: Page[]; currentId: string; migratedSlot
     pages = [{ id: newPageId(), name: 'Untitled', els: [], bg: p.paper, texture: false, seed: 7, createdAt: Date.now(), updatedAt: Date.now() }]
   }
   if (!pages.some((pg) => pg.id === currentId)) currentId = pages[0].id
+  pages = pages.map((pg) => ({ ...pg, els: migrateEmphasis(pg.els) }))
   return { pages, currentId, migratedSlots }
 }
 
@@ -9001,30 +9082,31 @@ const getWide = () => wideQuery().matches
 const getWideServer = () => false
 const GATE_CSS = `@media (min-width: ${MIN_EDITOR_WIDTH}px) { .pg-gate-notice { display: none } }`
 
-// Floating character toolbar: B · text colour (A + bar) · highlight (pen +
-// bar) · Emphasis ▾ (current value muted) · divider · ✕. Measures itself
-// so it always sits ≥ 12px beside the selection and never over it; flips
-// to the left when the right side would run past the artboard.
+// Floating character toolbar: [Bold, Dots, Side line] | [Colour] | [Clear].
+// 32px buttons, measured so it sits ≥ 14px beside the selection and flips
+// left when the right side would run past the artboard. Toggles show on
+// (filled) / mixed (half filled) over the whole selection.
+type ToggleState = 'on' | 'mixed' | 'off'
 function CharToolbar({
-  box, artRight, bold, color, bg, emphasis, emphasisOk, pop, setPop, onBold, onColor, onBg, onEmphasis, onClear,
+  box, artRight, bold, dots, sideLine, ink, color, bg, open, setOpen, onToggle, onColor, onBg, onClear,
 }: {
   box: { x1: number; x2: number; y1: number; y2: number }
   artRight: number
-  bold: boolean
-  color: string
+  bold: ToggleState
+  dots: ToggleState
+  sideLine: ToggleState
+  ink: string
+  color: string | null
   bg: string | null
-  emphasis: string
-  emphasisOk: boolean
-  pop: 'color' | 'bg' | 'emphasis' | null
-  setPop: (p: 'color' | 'bg' | 'emphasis' | null) => void
-  onBold: () => void
-  onColor: (hex: string) => void
-  onBg: (hex: string) => void
-  onEmphasis: (k: 'none' | 'underline' | 'highlight') => void
+  open: boolean
+  setOpen: (o: boolean) => void
+  onToggle: (k: 'bold' | 'dots' | 'sideLine', on: boolean) => void
+  onColor: (hex: string | null) => void
+  onBg: (hex: string | null) => void
   onClear: () => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
-  const [size, setSize] = useState({ w: 280, h: 36 })
+  const [size, setSize] = useState({ w: 230, h: 40 })
   useLayoutEffect(() => {
     const n = ref.current
     if (!n) return
@@ -9041,26 +9123,43 @@ function CharToolbar({
   const flip = box.x2 + GAP + size.w > artRight
   const left = flip ? Math.max(8, box.x1 - GAP - size.w) : box.x2 + GAP
   const top = Math.max(8, Math.min(window.innerHeight - size.h - 8, (box.y1 + box.y2) / 2 - size.h / 2))
-  const btn = 'flex h-7 items-center gap-1 rounded-full px-2 font-mono text-[11px] text-white/85 transition-colors duration-100 hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-white/50'
-  const bar = (c: string | null) => (
-    <span className="mt-[2px] h-[3px] w-4 rounded-[1px]" style={c ? { backgroundColor: c } : { border: '1px solid rgba(255,255,255,0.5)' }} aria-hidden="true" />
+  const btn = 'flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-white transition-colors duration-100 hover:bg-white/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-white/50'
+  const toggleBg = (st: ToggleState): React.CSSProperties => (st === 'on' ? { background: '#ffffff' } : st === 'mixed' ? { background: 'linear-gradient(90deg, #ffffff 50%, rgba(255,255,255,0.12) 50%)' } : {})
+  // The icon inverts over a filled background (difference: white on white = ink).
+  const icon = { mixBlendMode: 'difference' as const, color: '#ffffff' }
+  const toggle = (k: 'bold' | 'dots' | 'sideLine', state: ToggleState, title: string, children: React.ReactNode) => (
+    <button type="button" title={title} aria-label={title} aria-pressed={state === 'on' ? true : state === 'mixed' ? 'mixed' : false} onClick={() => onToggle(k, state !== 'on')} className={btn} style={toggleBg(state)}>
+      <span className="flex items-center justify-center" style={icon}>{children}</span>
+    </button>
   )
-  const swatches = (prop: 'color' | 'bg') => (
-    <div className="absolute left-0 top-full mt-1.5 flex items-center gap-1.5 rounded-full border border-white/15 bg-[#212121] px-2.5 py-2 shadow-2xl" role="group" aria-label={prop === 'color' ? 'Glyph colour' : 'Glyph highlight'}>
-      {GUIDE_COLORS.map((c) => (
-        <button
-          key={c.hex}
-          type="button"
-          aria-label={c.name}
-          title={c.name}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => (prop === 'color' ? onColor(c.hex) : onBg(c.hex))}
-          className={`h-4 w-4 shrink-0 rounded-full border transition-transform duration-100 hover:scale-110 ${(prop === 'color' ? color : bg) === c.hex ? 'border-white ring-1 ring-white/60' : 'border-white/25'}`}
-          style={{ backgroundColor: c.hex }}
-        />
-      ))}
+  const A = (extra: React.ReactNode) => (
+    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true" fill="currentColor">
+      <text x="7" y="15" fontSize="13" fontWeight="600" fontFamily="system-ui, sans-serif" textAnchor="middle">A</text>
+      {extra}
+    </svg>
+  )
+  // Light checkerboard so an ink-coloured "A" still reads on the dark pill.
+  const checker = 'repeating-conic-gradient(#b4b4b4 0 25%, #e6e6e6 0 50%) 0 0 / 6px 6px'
+  const swatch = (hex: string | null, current: boolean, label: string, onPick: () => void) => (
+    <button
+      key={hex ?? 'none'}
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onPick}
+      className={`relative h-4 w-4 shrink-0 rounded-full border transition-transform duration-100 hover:scale-110 ${current ? 'border-white ring-1 ring-white/70' : 'border-white/30'}`}
+      style={hex ? { backgroundColor: hex } : undefined}
+    >
+      {!hex && <svg viewBox="0 0 16 16" className="absolute inset-0" aria-hidden="true"><line x1="3.5" y1="12.5" x2="12.5" y2="3.5" stroke="rgba(255,255,255,0.7)" strokeWidth="1.2" /></svg>}
+    </button>
+  )
+  const row = (label: string, current: string | null, noneLabel: string, pick: (hex: string | null) => void) => (
+    <div className="flex items-center gap-1.5">
+      <span className="w-[76px] shrink-0 font-mono text-[10px] text-white/55">{label}</span>
+      {swatch(null, current === null, noneLabel, () => pick(null))}
+      {GUIDE_COLORS.map((c) => swatch(c.hex, current === c.hex, `${label}: ${c.name}`, () => pick(c.hex)))}
       <label className="ml-1 flex items-center gap-1 font-mono text-[10px] text-white/60" title="Custom">
-        <input type="color" aria-label="Custom colour" defaultValue={(prop === 'color' ? color : bg) ?? '#bc002d'} onChange={(e) => (prop === 'color' ? onColor(e.target.value) : onBg(e.target.value))} className="h-4 w-5 cursor-pointer rounded border border-white/15 bg-transparent" />
+        <input type="color" aria-label={`${label} custom`} defaultValue={current ?? '#bc002d'} onChange={(e) => pick(e.target.value)} className="h-4 w-5 cursor-pointer rounded border border-white/15 bg-transparent" />
         custom
       </label>
     </div>
@@ -9071,47 +9170,34 @@ function CharToolbar({
       data-char-toolbar
       role="toolbar"
       aria-label="Character styling"
-      className="fixed z-[96] flex items-center gap-0.5 whitespace-nowrap rounded-full border border-white/15 bg-[#212121] px-1.5 py-1 shadow-2xl"
-      style={{ left, top }}
+      onMouseDown={(e) => e.preventDefault()}
+      className="fixed z-[96] flex select-none items-center gap-1 whitespace-nowrap rounded-xl border border-white/15 bg-[#212121] p-1 shadow-2xl"
+      style={{ left, top, userSelect: 'none' }}
     >
-      <button type="button" title="Bold" aria-label="Bold" aria-pressed={bold} onMouseDown={(e) => e.preventDefault()} onClick={onBold} className={`${btn} w-7 justify-center font-bold ${bold ? 'bg-white/15 text-white' : ''}`}>
-        B
-      </button>
+      {toggle('bold', bold, 'Bold', <span className="text-[14px] font-bold leading-none">B</span>)}
+      {toggle('dots', dots, 'Emphasis dots', A(<circle cx="7" cy="3" r="1.6" />))}
+      {toggle('sideLine', sideLine, 'Side line', A(<rect x="14" y="4" width="1.6" height="11" rx="0.8" />))}
+      <span className="mx-0.5 h-5 w-px shrink-0 bg-white/20" aria-hidden="true" />
       <div className="relative">
-        <button type="button" title="Text colour" aria-label="Text colour" aria-expanded={pop === 'color'} onMouseDown={(e) => e.preventDefault()} onClick={() => setPop(pop === 'color' ? null : 'color')} className={`${btn} w-8 flex-col justify-center gap-0 leading-none`}>
-          <span className="text-[13px] font-semibold leading-none">A</span>
-          {bar(color)}
+        <button type="button" title="Colour" aria-label="Colour" aria-expanded={open} onClick={() => setOpen(!open)} className={btn}>
+          <span className="flex h-6 w-6 items-center justify-center rounded-[5px] text-[14px] font-semibold leading-none" style={{ color: color ?? ink, background: bg ?? checker }}>
+            A
+          </span>
         </button>
-        {pop === 'color' && swatches('color')}
-      </div>
-      <div className="relative">
-        <button type="button" title="Highlight" aria-label="Highlight" aria-expanded={pop === 'bg'} onMouseDown={(e) => e.preventDefault()} onClick={() => setPop(pop === 'bg' ? null : 'bg')} className={`${btn} w-8 flex-col justify-center gap-0 leading-none`}>
-          <svg width="14" height="13" viewBox="0 0 14 13" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" strokeLinecap="round">
-            <path d="M8.2 1.5 12.5 5.8 6.3 12H3.5L2 10.5V7.7Z" />
-            <path d="M6.6 3.1l4.3 4.3" />
-          </svg>
-          {bar(bg)}
-        </button>
-        {pop === 'bg' && swatches('bg')}
-      </div>
-      <div className="relative">
-        <button type="button" title={emphasisOk ? 'Emphasis — animated underline or wash' : 'Emphasis draws on horizontal, single-run text only'} aria-label="Emphasis" aria-expanded={pop === 'emphasis'} onMouseDown={(e) => e.preventDefault()} onClick={() => setPop(pop === 'emphasis' ? null : 'emphasis')} className={btn}>
-          Emphasis <span className="text-white/45">{emphasis === 'highlight' ? 'wash' : emphasis}</span> <span aria-hidden="true" className="text-white/45">▾</span>
-        </button>
-        {pop === 'emphasis' && (
-          <div className="absolute left-0 top-full mt-1.5 flex flex-col rounded-lg border border-white/15 bg-[#212121] p-1 shadow-2xl" role="menu" aria-label="Emphasis">
-            {([['none', 'None'], ['underline', 'Underline'], ['highlight', 'Wash']] as const).map(([k, label]) => (
-              <button key={k} type="button" role="menuitemradio" aria-checked={emphasis === k} onMouseDown={(e) => e.preventDefault()} onClick={() => { onEmphasis(k); setPop(null) }} className={`rounded px-2.5 py-1 text-left font-mono text-[11px] transition-colors duration-100 hover:bg-white/10 ${emphasis === k ? 'text-white' : 'text-white/70'}`}>
-                {label}
-              </button>
-            ))}
-            {!emphasisOk && <span className="max-w-[180px] px-2.5 pb-1 pt-0.5 text-[10px] leading-4 text-white/40">Stored now; draws once this text is horizontal.</span>}
+        {open && (
+          <div className="absolute left-0 top-full mt-1.5 flex flex-col gap-2 rounded-xl border border-white/15 bg-[#212121] px-3 py-2.5 shadow-2xl" role="group" aria-label="Colour">
+            {row('Text', color, 'Text: none (element ink)', onColor)}
+            {row('Background', bg, 'Background: none', onBg)}
           </div>
         )}
       </div>
-      <span className="mx-1 h-4 w-px shrink-0 bg-white/20" aria-hidden="true" />
-      <button type="button" title="Clear styling" aria-label="Clear styling" onMouseDown={(e) => e.preventDefault()} onClick={onClear} className={`${btn} w-7 justify-center`}>
-        ✕
+      <span className="mx-0.5 h-5 w-px shrink-0 bg-white/20" aria-hidden="true" />
+      <button type="button" title="Clear formatting" aria-label="Clear formatting" onClick={onClear} className={btn}>
+        <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" strokeLinecap="round">
+          <path d="M10.5 2.5 15.5 7.5 9 14H5.5L2.5 11Z" />
+          <path d="M7.2 5.8l5 5" />
+          <path d="M9 14h6.5" />
+        </svg>
       </button>
     </div>
   )
@@ -9457,7 +9543,7 @@ function SumiEditor() {
   const [charMode, setCharMode] = useState<number | null>(null) // text element id
   const [charSel, setCharSel] = useState<{ start: number; end: number } | null>(null)
   const [charHover, setCharHover] = useState<number | null>(null)
-  const [charPop, setCharPop] = useState<'color' | 'bg' | 'emphasis' | null>(null)
+  const [charPop, setCharPop] = useState(false) // the colour popover
   // Per-glyph geometry: polygon in artboard units (for the overlay) and the
   // screen box (for the toolbar's placement).
   const [charGlyphs, setCharGlyphs] = useState<{ i: number; pts: string; sx: number; sy: number; sw: number; sh: number; lx: number; ly: number; lw: number; lh: number }[]>([])
@@ -12619,7 +12705,7 @@ function SumiEditor() {
   }
   const cheatOpenRef = useRef(false)
   cheatOpenRef.current = cheatOpen
-  const charModeRef = useRef<{ active: boolean; enter: () => void; exit: () => void; selectAll: () => void }>({ active: false, enter: () => {}, exit: () => {}, selectAll: () => {} })
+  const charModeRef = useRef<{ active: boolean; enter: () => void; closePop: () => boolean; exit: () => void; selectAll: () => void }>({ active: false, enter: () => {}, closePop: () => false, exit: () => {}, selectAll: () => {} })
   const inspoNavRef = useRef<{ active: boolean; canBack: boolean; step: (d: -1 | 1) => void; keep: () => void; cancel: () => void; more: () => void; save: () => void; home: () => void; axis: (a: InspoAxis) => void; back: () => void }>({ active: false, canBack: false, step: () => {}, keep: () => {}, cancel: () => {}, more: () => {}, save: () => {}, home: () => {}, axis: () => {}, back: () => {} })
   const macRef = useRef(mac)
   macRef.current = mac
@@ -12779,7 +12865,7 @@ function SumiEditor() {
       if (cm.active) {
         if (e.key === 'Escape') {
           e.preventDefault()
-          cm.exit()
+          if (!cm.closePop()) cm.exit()
           return
         }
         if ((e.metaKey || e.ctrlKey) && e.code === 'KeyA' && !e.altKey && !e.shiftKey) {
@@ -13614,42 +13700,26 @@ function SumiEditor() {
       : null
   const selStyles = activeSel && tv ? segmentText(tv.text, tv.ranges ?? []).filter((sg) => sg.end > activeSel.start && sg.start < activeSel.end) : []
   const selCommon = (k: 'color' | 'bg'): string | null => (selStyles.length && selStyles.every((sg) => sg.s[k] === selStyles[0].s[k]) ? selStyles[0].s[k] ?? null : null)
-  const selAllBold = !!(
-    activeSel &&
-    tv &&
-    segmentText(tv.text, tv.ranges ?? [])
-      .filter((s) => s.end > activeSel.start && s.start < activeSel.end)
-      .every((s) => s.s.bold)
-  )
+  // Toggle state over the whole selection: on / mixed / off.
+  const selToggle = (k: 'bold' | 'dots' | 'sideLine'): 'on' | 'mixed' | 'off' => (selStyles.length && selStyles.every((sg) => sg.s[k]) ? 'on' : selStyles.some((sg) => sg.s[k]) ? 'mixed' : 'off')
 
-  const applyRange = (patch: RangeStyle | 'clear') => {
+  // Set (value), unset (null) or clear every per-character style on the
+  // selection. One undo step per call, never coalesced; selection kept.
+  const applyRange = (patch: Partial<Record<RangeProp, string | boolean | null>> | 'clear') => {
     if (!selected || !tv || !activeSel) return
-    const cur = tv.ranges ?? []
-    let next: TextRange[]
-    if (patch === 'clear') {
-      // Subtract the selection from every normalized range.
-      next = normalizeRanges(tv.text, cur).flatMap((r) => {
-        const parts: TextRange[] = []
-        if (r.start < activeSel.start) parts.push({ ...r, end: Math.min(r.end, activeSel.start) })
-        if (r.end > activeSel.end) parts.push({ ...r, start: Math.max(r.start, activeSel.end) })
-        return parts.filter((p) => p.end > p.start)
-      })
-    } else {
-      next = normalizeRanges(tv.text, [...cur, { start: activeSel.start, end: activeSel.end, ...patch }])
+    const per = segmentText(tv.text, tv.ranges ?? []).flatMap((sg) => Array.from({ length: sg.end - sg.start }, () => ({ ...sg.s })))
+    for (let i = activeSel.start; i < activeSel.end && i < per.length; i++) {
+      if (patch === 'clear') per[i] = {}
+      else for (const k of RANGE_PROPS) if (k in patch) {
+        const val = patch[k]
+        if (val === null || val === undefined || val === false) delete per[i][k]
+        else (per[i] as Record<string, unknown>)[k] = val
+      }
     }
-    // One undo step per toolbar action (never coalesced), selection kept.
+    const next = rangesFromPerChar(per)
     pushUndo()
     genStreak.current = false
-    const clearEmphasis = patch === 'clear' && tv.emphasis && tv.emphasis.end > activeSel.start && tv.emphasis.start < activeSel.end
-    setEls((list) => list.map((e) => (e.id === selected.id ? { ...e, v: { ...e.v, ranges: next, ...(clearEmphasis ? { emphasis: undefined } : {}) } } : e)))
-  }
-  // Emphasis — the one animated span per layer — moved onto the selection.
-  const applyEmphasis = (treatment: 'none' | 'underline' | 'highlight') => {
-    if (!selected || !tv || !activeSel) return
-    pushUndo()
-    genStreak.current = false
-    const span = treatment === 'none' ? undefined : { ...(tv.emphasis ?? defEmphasis(palette.accent)), treatment, start: activeSel.start, end: activeSel.end }
-    setEls((list) => list.map((e) => (e.id === selected.id ? { ...e, v: { ...e.v, emphasis: span } } : e)))
+    setEls((list) => list.map((e) => (e.id === selected.id ? { ...e, v: { ...e.v, ranges: next } } : e)))
   }
 
   // ── Character mode plumbing ──
@@ -13664,13 +13734,13 @@ function SumiEditor() {
     setCharMode(id)
     setCharSel(null)
     setCharHover(null)
-    setCharPop(null)
+    setCharPop(false)
   }
   const exitCharMode = () => {
     setCharMode(null)
     setCharSel(null)
     setCharHover(null)
-    setCharPop(null)
+    setCharPop(false)
     charAnchor.current = null
   }
   // Glyph geometry from the live text node: extents per rendered glyph,
@@ -13767,7 +13837,7 @@ function SumiEditor() {
   }, [charMode])
   const glyphDown = (e: React.PointerEvent, i: number) => {
     e.stopPropagation()
-    setCharPop(null)
+    setCharPop(false)
     if (e.shiftKey && charAnchor.current !== null) {
       const a = charAnchor.current
       setCharSel({ start: Math.min(a, i), end: Math.max(a, i) + 1 })
@@ -13781,6 +13851,11 @@ function SumiEditor() {
     active: charMode !== null,
     enter: () => {
       if (selectedIds.length === 1) enterCharMode(selectedIds[0])
+    },
+    closePop: () => {
+      if (!charPop) return false
+      setCharPop(false)
+      return true
     },
     exit: exitCharMode,
     selectAll: () => {
@@ -14869,14 +14944,7 @@ function SumiEditor() {
                 return (
                   <g key={`tint-${e.id}`} data-ui transform={charTransform || undefined} style={{ pointerEvents: 'none' }}>
                     {runs.map((r, k) => (
-                      <Fragment key={k}>
-                        <rect x={r2(r.x)} y={r2(r.y)} width={r2(r.w)} height={r2(r.h)} rx={3} fill={palette.accent} fillOpacity={0.12} />
-                        {vert ? (
-                          <line x1={r2(r.x + r.w)} y1={r2(r.y)} x2={r2(r.x + r.w)} y2={r2(r.y + r.h)} stroke={palette.accent} strokeWidth={2} vectorEffect="non-scaling-stroke" />
-                        ) : (
-                          <line x1={r2(r.x)} y1={r2(r.y)} x2={r2(r.x + r.w)} y2={r2(r.y)} stroke={palette.accent} strokeWidth={2} vectorEffect="non-scaling-stroke" />
-                        )}
-                      </Fragment>
+                      <rect key={k} x={r2(r.x)} y={r2(r.y)} width={r2(r.w)} height={r2(r.h)} rx={3} fill="#4a8af4" fillOpacity={0.15} />
                     ))}
                   </g>
                 )
@@ -15300,22 +15368,21 @@ function SumiEditor() {
           {charMode !== null && activeSel && tv && canvasRect && (() => {
             const sel = charGlyphs.filter((g) => g.i >= activeSel.start && g.i < activeSel.end)
             if (!sel.length) return null
-            const emphasisNow = tv.emphasis && tv.emphasis.end > activeSel.start && tv.emphasis.start < activeSel.end ? tv.emphasis.treatment : 'none'
             return createPortal(
               <CharToolbar
                 box={{ x1: Math.min(...sel.map((g) => g.sx)), x2: Math.max(...sel.map((g) => g.sx + g.sw)), y1: Math.min(...sel.map((g) => g.sy)), y2: Math.max(...sel.map((g) => g.sy + g.sh)) }}
                 artRight={canvasRect.left + canvasRect.width}
-                bold={selAllBold}
-                color={selCommon('color') ?? tv.color}
+                bold={selToggle('bold')}
+                dots={selToggle('dots')}
+                sideLine={selToggle('sideLine')}
+                ink={tv.color}
+                color={selCommon('color')}
                 bg={selCommon('bg')}
-                emphasis={emphasisNow}
-                emphasisOk={!tv.vertical && (tv.repeatLines ?? 1) <= 1}
-                pop={charPop}
-                setPop={setCharPop}
-                onBold={() => applyRange({ bold: !selAllBold })}
+                open={charPop}
+                setOpen={setCharPop}
+                onToggle={(k, on) => applyRange({ [k]: on })}
                 onColor={(hex) => applyRange({ color: hex })}
                 onBg={(hex) => applyRange({ bg: hex })}
-                onEmphasis={applyEmphasis}
                 onClear={() => applyRange('clear')}
               />,
               rootRef.current ?? document.body,
