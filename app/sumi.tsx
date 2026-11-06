@@ -2270,8 +2270,11 @@ const defHalftone = (p: Palette): HalftoneV => ({
 })
 
 const defText = (p: Palette): TextV => ({
-  text: '劉', font: 'Noto Serif JP', size: 460, weight: 600, tracking: 0, lineHeight: 1.15,
-  vertical: true, x: 44, y: 46, rotation: 0, color: '#111111', // tategaki by default; horizontal stays a dial in the inspector
+  // New text is the "Tategaki column" preset (see TEXT_PRESETS below —
+  // referenced lazily, at call time). Horizontal stays a dial.
+  ...(TEXT_PRESETS['Tategaki column'](p) as Partial<TextV>),
+  text: '生き甲斐のある暮らし', font: 'Shippori Mincho', size: 54, weight: 400, tracking: 0.12, lineHeight: 1.15,
+  vertical: true, x: 86, y: 40, rotation: 0, color: '#111111',
   outline: false, outlineWidth: 2, outlineFill: 'none',
   stamp: 'none', stampWidth: 14, stampRough: 0.55,
   misreg: { on: false, dx: 5, dy: 3, color: p.accent },
