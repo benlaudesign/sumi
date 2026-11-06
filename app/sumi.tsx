@@ -17,7 +17,7 @@ import { Kbd } from '../src/components/Kbd'
 import { Tip } from '../src/components/Tip'
 import { DialRoot, useDialKit } from 'dialkit'
 import 'dialkit/styles.css'
-import { INSPO_NAV, INSPO_NAV_VARIANTS, type InspoNavVariant, type LightboxLayout } from '../src/config/inspoNav'
+import { INSPO_NAV, INSPO_NAV_VARIANTS, type FilmstripControls, type InspectorBehaviour, type InspoNavVariant, type LightboxLayout } from '../src/config/inspoNav'
 import { CheatSheet } from '../src/components/CheatSheet'
 import { isMacPlatform, matchShortcut, shortcutChips } from '../src/config/shortcuts'
 import { BUILTIN_FONTS, CURATED_FONTS, fontCssHref, fontLinkId } from '../src/config/fonts'
@@ -9051,7 +9051,7 @@ function SumiEditor() {
   // Canvas zoom — ⌥ + mouse wheel over the workspace. Native listener with
   // passive:false so preventDefault can stop the page scroll.
   const [zoom, setZoom] = useState(1)
-  const mainRef = useRef<HTMLElement>(null)
+  const mainRef = useRef<HTMLDivElement>(null)
   // Hold Space → hand/pan tool (Figma/Photoshop convention), dragging scrolls
   // the canvas. Space is ALSO the existing play/pause shortcut (see
   // toggleTlRef below) — a quick tap with no drag still falls through to
@@ -12532,7 +12532,7 @@ function SumiEditor() {
   }
   const cheatOpenRef = useRef(false)
   cheatOpenRef.current = cheatOpen
-  const inspoNavRef = useRef<{ active: boolean; step: (d: -1 | 1) => void; keep: () => void; cancel: () => void; more: () => void }>({ active: false, step: () => {}, keep: () => {}, cancel: () => {}, more: () => {} })
+  const inspoNavRef = useRef<{ active: boolean; step: (d: -1 | 1) => void; keep: () => void; cancel: () => void; more: () => void; save: () => void; home: () => void }>({ active: false, step: () => {}, keep: () => {}, cancel: () => {}, more: () => {}, save: () => {}, home: () => {} })
   const macRef = useRef(mac)
   macRef.current = mac
   const pushUndoCoalescedRef = useRef<(key: string) => void>(() => {})
@@ -12650,6 +12650,18 @@ function SumiEditor() {
         if (e.code === 'KeyR' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
           e.preventDefault()
           nv.more()
+          return
+        }
+        // S saves the focused candidate (never "+ Shape" during a session);
+        // 0 / Home jumps back to the pinned original.
+        if (e.code === 'KeyS' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+          e.preventDefault()
+          nv.save()
+          return
+        }
+        if (e.code === 'Digit0' || e.code === 'Home') {
+          e.preventDefault()
+          nv.home()
           return
         }
       }
@@ -13109,9 +13121,30 @@ function SumiEditor() {
     transitionMs: [INSPO_NAV.transitionMs, 0, 600, 10],
     thumbPx: [INSPO_NAV.thumbPx, 72, 240, 4],
     lightboxLayout: { type: 'select', options: ['grid', 'row'], default: INSPO_NAV.lightboxLayout },
+    // Filmstrip refinements
+    controls: { type: 'select', options: ['inline', 'header'], default: typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('controls') === 'header' ? 'header' : INSPO_NAV.controls },
+    thumbGapPx: [INSPO_NAV.thumbGapPx, 0, 32, 1],
+    inspector: { type: 'select', options: ['dim', 'collapse', 'none'], default: INSPO_NAV.inspector },
   })
   const navVariant = nav.variant as InspoNavVariant
   const lightboxLayout = nav.lightboxLayout as LightboxLayout
+  const stripControls = nav.controls as FilmstripControls
+  const inspectorBehaviour = nav.inspector as InspectorBehaviour
+  const filmstripOpen = inspoOpen && navVariant === 'filmstrip'
+  // Filmstrip batches accumulate (More appends); other variants show the latest batch only.
+  const [inspoBatches, setInspoBatches] = useState<InspoResult[]>([])
+  // Canvas area height, measured — the artboard fits ABOVE the strip.
+  const canvasAreaRef = useRef<HTMLDivElement>(null)
+  const [canvasAreaH, setCanvasAreaH] = useState(0)
+  useEffect(() => {
+    const el = canvasAreaRef.current
+    if (!el) return
+    const ro = new ResizeObserver(([entry]) => setCanvasAreaH(Math.round(entry.contentRect.height)))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const thumbRefs = useRef<(HTMLButtonElement | null)[]>([])
   // ── Layout variants (dev-only DialKit panel; freeze in src/config/layout.ts) ──
   const [layoutDefault] = useState<LayoutVariant>(() => {
     const q = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('layout') : null
@@ -13135,10 +13168,11 @@ function SumiEditor() {
   const [previewEls, setPreviewEls] = useState<El[] | null>(null)
   const [fadeFrom, setFadeFrom] = useState<{ key: number; page: PageState } | null>(null)
 
-  const runInspoBatch = async (batchSeed: number, mode: InspoMode) => {
+  const runInspoBatch = async (batchSeed: number, mode: InspoMode, append = false) => {
     const runId = ++inspoRunId.current
     setInspoBusy(true)
     setInspoResult(null)
+    if (!append) setInspoBatches([])
     setInspoProgress({ tries: 0, passing: 0 })
     const base: InspoPage = { els: structuredClone(els) as unknown as InspoEl[], bg, w: view.w, h: view.h, seed }
     // Off the current React flush before the pipeline's own flushSync renders.
@@ -13161,6 +13195,7 @@ function SumiEditor() {
     })
     if (runId !== inspoRunId.current) return
     setInspoResult(res)
+    setInspoBatches((b) => (append ? [...b, res] : [res]))
     setInspoBusy(false)
   }
 
@@ -13183,8 +13218,13 @@ function SumiEditor() {
   const inspoMore = () => {
     const next = (inspoSeed + 1) % 100000
     setInspoSeed(next)
-    resetNav()
-    void runInspoBatch(next, inspoMode)
+    if (navVariant === 'filmstrip') {
+      // Append: the strip keeps earlier batches; focus stays where it is.
+      void runInspoBatch(next, inspoMode, true)
+    } else {
+      resetNav()
+      void runInspoBatch(next, inspoMode)
+    }
   }
   const setInspoModeAndRun = (m: InspoMode) => {
     setInspoMode(m)
@@ -13205,8 +13245,9 @@ function SumiEditor() {
 
   // What the main canvas is showing right now, as a page (for the crossfade snapshot).
   const displayedPage = (): PageState => ({ els: previewEls ?? els, bg, texture, seed, w: view.w, h: view.h, bgGrad, pressGrain, overprint, frame })
-  const navShown = inspoResult?.shown ?? []
+  const navShown = navVariant === 'filmstrip' ? inspoBatches.flatMap((b) => b.shown) : inspoResult?.shown ?? []
   const navCount = navShown.length
+  const batchStartIdx = (bi: number) => 1 + inspoBatches.slice(0, bi).reduce((n, b) => n + b.shown.length, 0)
   const navCandidate = (idx: number): Scored | null => (idx >= 1 && idx <= navCount ? navShown[idx - 1] : null)
   // Show step idx on the main canvas (0 = original). `fade` crossfades
   // from whatever was showing; hover-previews in the filmstrip pass it too.
@@ -13216,12 +13257,24 @@ function SumiEditor() {
     setPreviewEls(c ? (c.els as unknown as El[]) : null)
     setSelectedIds([])
   }
-  const navStep = (dir: -1 | 1) => {
+  const navFocus = (next: number) => {
     if (navVariant === 'tray' || !inspoOpen) return
-    const next = Math.max(0, Math.min(navCount, navIdx + dir))
-    if (next === navIdx) return
-    setNavIdx(next)
-    if (navVariant !== 'lightbox') navShow(next)
+    const idx = Math.max(0, Math.min(navCount, next))
+    if (idx === navIdx) return
+    setNavIdx(idx)
+    if (navVariant !== 'lightbox') navShow(idx)
+    thumbRefs.current[idx]?.scrollIntoView({ inline: 'nearest', block: 'nearest', behavior: 'smooth' })
+  }
+  const navStep = (dir: -1 | 1) => navFocus(navIdx + dir)
+  // S — save the focused candidate to Saved without applying it.
+  const navSave = (idx = navIdx) => {
+    const c = navCandidate(idx)
+    if (!c) return
+    const pg = inspoPage(c)
+    const els2 = (structuredClone(pg.els) as El[]).map((e, i) => ({ ...e, id: i + 1 }))
+    const slot: SaveSlot = { id: `${Date.now()}-${Math.floor(Math.random() * 1e6)}`, name: `Inspo ${c.seed} · ${c.archetype}`, savedAt: Date.now(), page: { ...pg, els: els2, name: undefined } }
+    persistSlots([slot, ...slots])
+    flash(`Saved "${slot.name}"`)
   }
   // Keep = the one undo step. Step 0 (original) just ends the session.
   const navKeep = (idx = navIdx) => {
@@ -13233,7 +13286,7 @@ function SumiEditor() {
   }
   const navCancel = () => closeInspo()
   // Keeps the keydown listener (mounted once, above) pointing at fresh handlers.
-  inspoNavRef.current = { active: inspoOpen && navVariant !== 'tray', step: navStep, keep: () => navKeep(), cancel: navCancel, more: inspoMore }
+  inspoNavRef.current = { active: inspoOpen && navVariant !== 'tray', step: navStep, keep: () => navKeep(), cancel: navCancel, more: inspoMore, save: () => navSave(), home: () => navFocus(0) }
   // Keeps the keydown listener (mounted once, above) pointing at fresh handlers.
   inspoRef.current = {
     open: openInspo,
@@ -14551,9 +14604,13 @@ function SumiEditor() {
 
         {/* ── Canvas + timeline column ── */}
         <div className="flex min-w-0 flex-1 flex-col">
-        <main
-          ref={mainRef}
-          className={`relative flex min-w-0 flex-1 overflow-auto p-6 ${panning ? 'cursor-grabbing' : spacePressed ? 'cursor-grab' : ''}`}
+        <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+        <div
+          ref={(n) => {
+            mainRef.current = n
+            canvasAreaRef.current = n
+          }}
+          className={`relative flex min-h-0 min-w-0 flex-1 overflow-auto p-6 ${panning ? 'cursor-grabbing' : spacePressed ? 'cursor-grab' : ''}`}
           onPointerDownCapture={(e) => {
             // Capture phase: while Space is held, ANY pointerdown on the
             // canvas — even directly on an element — pans instead of
@@ -14587,7 +14644,11 @@ function SumiEditor() {
               // Fit BOTH constraints while keeping ratio — a stretched box
               // would letterbox the svg and desync pointer→canvas math.
               // m-auto centers when it fits and scrolls cleanly when zoomed.
-              width: `calc(min(100%, (100vh - 110px) * ${r2(view.w / view.h)}) * ${zoom})`,
+              // With the filmstrip open the artboard fits the measured area
+              // above the strip; otherwise the original viewport formula.
+              width: filmstripOpen && canvasAreaH > 0
+                ? `calc(min(100%, ${Math.max(120, canvasAreaH - 48)}px * ${r2(view.w / view.h)}) * ${zoom})`
+                : `calc(min(100%, (100vh - 110px) * ${r2(view.w / view.h)}) * ${zoom})`,
             }}
           >
           <svg
@@ -15134,35 +15195,130 @@ function SumiEditor() {
               </div>
             )
           })()}
-          {/* Filmstrip: slim strip over the bottom of the workspace — never pushes the canvas. */}
-          {inspoOpen && navVariant === 'filmstrip' && (
-            <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
-              <div className="pointer-events-auto flex max-w-[92%] items-stretch gap-2 overflow-x-auto rounded-lg border border-neutral-300 bg-paper/95 p-2 shadow-xl">
-                {[null, ...navShown].map((c, i) => (
-                  <button
-                    key={c ? c.seed : 'original'}
-                    type="button"
-                    onMouseEnter={() => navShow(i)}
-                    onMouseLeave={() => navShow(navIdx)}
-                    onFocus={() => navShow(i)}
-                    onBlur={() => navShow(navIdx)}
-                    onClick={() => navKeep(i)}
-                    aria-label={c ? `Keep ${c.seed} · ${c.archetype}` : 'Keep the original'}
-                    className={`flex shrink-0 flex-col items-start gap-1 rounded text-left focus:outline-none ${i === navIdx ? 'ring-2 ring-red ring-offset-2 ring-offset-paper' : ''}`}
-                  >
-                    <div className="overflow-hidden rounded border border-neutral-300" style={{ width: nav.thumbPx, aspectRatio: `${view.w} / ${view.h}` }}>
-                      <PreviewCanvas page={c ? inspoPage(c) : currentPage()} ns={`-fs${i}`} />
-                    </div>
-                    <span className="font-mono text-[9px] tabular-nums text-neutral-700">{c ? `${c.archetype} · ${Math.round(c.score * 100)}` : 'original'}</span>
-                  </button>
-                ))}
-                {inspoBusy && <div className="shrink-0 animate-pulse rounded border border-dashed border-neutral-400" style={{ width: nav.thumbPx, aspectRatio: `${view.w} / ${view.h}` }} />}
-                <div className="flex shrink-0 flex-col justify-end pl-1 font-mono text-[10px] tabular-nums text-neutral-700">
-                  {navIdx} / {navCount}
+        </div>
+          {/* Filmstrip: in flow below the canvas area — never over the poster.
+              Controls live here (inline cluster or header row), original is
+              pinned left, batches append with a seed label between them. */}
+          {filmstripOpen && (() => {
+            const controls = (
+              <div className="flex shrink-0 items-center gap-1.5 font-mono text-[10.5px]" role="group" aria-label="Inspo controls">
+                <div className="flex gap-0.5 rounded-full bg-neutral-100 p-0.5" role="group" aria-label="How far to stray">
+                  {(['subtle', 'bold'] as const).map((m) => (
+                    <button key={m} type="button" onClick={() => setInspoModeAndRun(m)} aria-pressed={inspoMode === m} className={`rounded-full px-2 py-0.5 capitalize ${inspoMode === m ? 'bg-paper text-ink shadow-sm' : 'text-neutral-600 hover:text-ink'}`}>
+                      {m}
+                    </button>
+                  ))}
+                </div>
+                <label className="flex items-center gap-1 text-neutral-700" title={inspoResult ? `${inspoResult.passing.length} of ${inspoResult.tries} passed (dev)` : undefined}>
+                  seed
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={inspoSeedDraft ?? String(inspoSeed)}
+                    onChange={(e) => setInspoSeedDraft(e.target.value)}
+                    onBlur={() => {
+                      if (inspoSeedDraft !== null) {
+                        const n = Number(inspoSeedDraft)
+                        if (Number.isFinite(n) && inspoSeedDraft.trim() !== '') {
+                          const v = Math.max(0, Math.floor(n)) % 100000
+                          setInspoSeed(v)
+                          resetNav()
+                          void runInspoBatch(v, inspoMode)
+                        }
+                      }
+                      setInspoSeedDraft(null)
+                    }}
+                    onKeyDown={(e) => {
+                      e.stopPropagation()
+                      if (e.key === 'Enter' || e.key === 'Escape') (e.target as HTMLInputElement).blur()
+                    }}
+                    className="w-14 rounded border border-neutral-300 bg-paper px-1.5 py-0.5 tabular-nums text-ink outline-none focus:border-ink"
+                  />
+                </label>
+                <button type="button" className={`${btn} py-0.5`} onClick={inspoMore} disabled={inspoBusy}>
+                  More<Kbd>r</Kbd>
+                </button>
+                <button type="button" className={`${btn} px-1.5 py-0.5`} onClick={navCancel} aria-label="Close Inspo (Esc)">×</button>
+              </div>
+            )
+            const indicator = (
+              <span className="shrink-0 font-mono text-[10px] tabular-nums text-neutral-700" aria-live="polite">
+                {navIdx} / {navCount}
+                {inspoBusy ? ' · generating…' : ''}
+              </span>
+            )
+            const thumbH = Math.round((nav.thumbPx * view.h) / view.w)
+            const thumb = (c: Scored | null, i: number, muted = false) => (
+              <button
+                key={c ? c.seed : 'original'}
+                ref={(n) => {
+                  thumbRefs.current[i] = n
+                }}
+                type="button"
+                onPointerEnter={() => {
+                  if (hoverTimer.current) clearTimeout(hoverTimer.current)
+                  hoverTimer.current = setTimeout(() => navShow(i), INSPO_NAV.hoverDelayMs)
+                }}
+                onFocus={() => navShow(i)}
+                onClick={() => navKeep(i)}
+                title={c ? `${c.seed} · score ${Math.round(c.score * 100)} (dev)` : 'The page as it is'}
+                aria-label={c ? `Keep ${c.archetype} (${c.seed})` : 'Keep the original'}
+                className={`group/th flex shrink-0 flex-col items-start gap-1 rounded-sm text-left transition-transform duration-150 focus:outline-none ${i === navIdx ? '-translate-y-px' : ''} ${muted ? 'opacity-70' : ''}`}
+              >
+                <div
+                  className={`overflow-hidden rounded-sm bg-paper ${i === navIdx ? 'shadow-md ring-[1.5px] ring-ink' : 'ring-1 ring-neutral-300 group-hover/th:ring-neutral-500'}`}
+                  style={{ width: nav.thumbPx, height: thumbH }}
+                >
+                  <PreviewCanvas page={c ? inspoPage(c) : currentPage()} ns={`-fs${i}`} />
+                </div>
+                <span className={`font-mono text-[10px] ${i === navIdx ? 'text-ink' : 'text-neutral-700'}`}>{c ? c.archetype : 'original'}</span>
+              </button>
+            )
+            const thumbs: React.ReactNode[] = []
+            inspoBatches.forEach((b, bi) => {
+              if (bi > 0)
+                thumbs.push(
+                  <div key={`b${b.batchSeed}`} className="flex shrink-0 flex-col items-center justify-center self-stretch px-1 font-mono text-[9px] text-neutral-500" aria-hidden="true">
+                    <span className="h-full w-px bg-neutral-300" />
+                    <span className="py-1 tabular-nums">{b.batchSeed}</span>
+                    <span className="h-full w-px bg-neutral-300" />
+                  </div>,
+                )
+              b.shown.forEach((c, j) => thumbs.push(thumb(c, batchStartIdx(bi) + j)))
+            })
+            return (
+              <div className="shrink-0 border-t border-neutral-300 bg-paper" aria-label="Inspo filmstrip">
+                {stripControls === 'header' && (
+                  <div className="flex items-center justify-between gap-3 border-b border-neutral-200 px-3 py-1.5">
+                    {controls}
+                    {indicator}
+                  </div>
+                )}
+                <div
+                  className="flex items-stretch overflow-x-auto px-3 py-2.5"
+                  style={{ gap: nav.thumbGapPx }}
+                  onPointerLeave={() => {
+                    if (hoverTimer.current) clearTimeout(hoverTimer.current)
+                    navShow(navIdx)
+                  }}
+                >
+                  {/* Pinned: stays put while the batches scroll underneath. */}
+                  <div className="sticky left-0 z-10 flex shrink-0 items-stretch bg-paper pr-1" style={{ gap: nav.thumbGapPx, marginLeft: -12, paddingLeft: 12 }}>
+                    {stripControls === 'inline' && (
+                      <div className="flex shrink-0 flex-col justify-between gap-2 self-stretch pr-3" style={{ borderRight: '1px solid var(--color-neutral-300)' }}>
+                        {controls}
+                        {indicator}
+                      </div>
+                    )}
+                    {thumb(null, 0, true)}
+                    <div className="w-px shrink-0 self-stretch bg-neutral-300" aria-hidden="true" />
+                  </div>
+                  {thumbs}
+                  {inspoBusy && <div className="shrink-0 animate-pulse rounded-sm border border-dashed border-neutral-400" style={{ width: nav.thumbPx, height: thumbH }} />}
                 </div>
               </div>
-            </div>
-          )}
+            )
+          })()}
         </main>
 
         {/* ── Motion timeline — scrub, transport, per-layer bars ── */}
@@ -15415,9 +15571,10 @@ function SumiEditor() {
         </div>
 
         {/* ── Inspector (DialKit controls inline) ── */}
-        {!uiHidden && (
+        {!uiHidden && !(filmstripOpen && inspectorBehaviour === 'collapse') && (
         <div
-          className={pageLeft && lay.slideIn === 'overlay' ? 'absolute inset-y-0 right-0 z-[60] shadow-2xl' : 'shrink-0 overflow-hidden'}
+          inert={filmstripOpen && inspectorBehaviour === 'dim'}
+          className={`${pageLeft && lay.slideIn === 'overlay' ? 'absolute inset-y-0 right-0 z-[60] shadow-2xl' : 'shrink-0 overflow-hidden'} ${filmstripOpen && inspectorBehaviour === 'dim' ? 'pointer-events-none opacity-40 transition-opacity duration-200' : 'transition-opacity duration-200'}`}
           style={
             pageLeft
               ? lay.slideIn === 'overlay'
@@ -16389,7 +16546,7 @@ function SumiEditor() {
         </div>
       )}
       {/* Floating Inspo control — Subtle/Bold, seed, More — shared by every non-tray variant. */}
-      {inspoOpen && navVariant !== 'tray' && (
+      {inspoOpen && navVariant !== 'tray' && navVariant !== 'filmstrip' && (
         <div className="fixed left-1/2 top-[50px] z-[126] flex -translate-x-1/2 items-center gap-2 rounded-full border border-neutral-300 bg-paper px-2 py-1 font-mono text-[10.5px] shadow-xl" role="group" aria-label="Inspo controls">
           <div className="flex gap-0.5 rounded-full bg-neutral-100 p-0.5" role="group" aria-label="How far to stray">
             {(['subtle', 'bold'] as const).map((m) => (
