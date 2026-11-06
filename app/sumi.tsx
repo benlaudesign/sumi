@@ -13204,6 +13204,7 @@ function SumiEditor() {
   const [axisBase, setAxisBase] = useState<Scored | null>(null)
   type AxisFrame = { axis: InspoAxis; base: Scored | null; batches: InspoResult[]; result: InspoResult | null; navIdx: number; seed: number }
   const [axisStack, setAxisStack] = useState<AxisFrame[]>([])
+  const AXIS_HISTORY_CAP = 10
   const [inspoBusy, setInspoBusy] = useState(false)
   const inspoRunId = useRef(0)
   const inspoCtx = useMemo(() => makeInspoCtx(palette, fontOptions), [palette, fontOptions])
@@ -13335,9 +13336,10 @@ function SumiEditor() {
   // Branch the focused thumb (or this frame's base) onto an axis. The
   // canvas keeps showing it while the new batch lands.
   const switchAxis = (axis: InspoAxis) => {
+    if (axis === inspoAxis) return // the active axis again: nothing, no history
     const from = navCandidate(navIdx) ?? axisBase
     if (!from && pageIsEmpty) return
-    setAxisStack((st) => [...st, { axis: inspoAxis, base: axisBase, batches: inspoBatches, result: inspoResult, navIdx, seed: inspoSeed }])
+    setAxisStack((st) => [...st, { axis: inspoAxis, base: axisBase, batches: inspoBatches, result: inspoResult, navIdx, seed: inspoSeed }].slice(-AXIS_HISTORY_CAP))
     const next = (inspoSeed + 1) % 100000
     setInspoSeed(next)
     setInspoAxis(axis)
@@ -15015,44 +15017,43 @@ function SumiEditor() {
               pinned left, batches append with a seed label between them. */}
           {filmstripOpen && (() => {
             const AXES: { id: InspoAxis; label: string; key: string }[] = [{ id: 'layout', label: 'Layout', key: 'l' }, { id: 'colour', label: 'Colour', key: 'c' }, { id: 'form', label: 'Form', key: 'f' }]
-            const axisLabel = (a: InspoAxis) => AXES.find((x) => x.id === a)!.label
-            const crumbs = [...axisStack.map((f) => f.axis), inspoAxis]
+            // Fixed-width block so nothing reflows when the axis changes:
+            // More / × · divider · the three axis rows (+ ⌫ back when there's
+            // history) · counter pinned to the bottom.
             const controls = (
-              <div className="flex shrink-0 flex-col justify-between gap-2 self-stretch pr-3" style={{ borderRight: '1px solid var(--color-neutral-300)' }} role="group" aria-label="Inspo controls">
+              <div className="flex w-40 shrink-0 flex-col self-stretch pr-3" style={{ borderRight: '1px solid var(--color-neutral-300)' }} role="group" aria-label="Inspo controls">
                 <div className="flex items-center gap-1.5">
                   <button type="button" className={`${btn} py-0.5`} onClick={inspoMore} disabled={inspoBusy} title={DEV ? `Next batch (seed ${inspoSeed} → ${(inspoSeed + 1) % 100000})` : 'Next batch'}>
                     More<Kbd>m</Kbd>
                   </button>
                   <button type="button" className={`${btn} px-1.5 py-0.5`} onClick={navCancel} aria-label="Close Inspo (Esc)">×</button>
                 </div>
-                {/* Axis switch: branch the focused thumb onto Layout / Colour / Form.
-                    The breadcrumb above it is the path taken; Backspace steps back. */}
-                <div className="flex flex-col gap-1">
-                  <span className="font-mono text-[10px] text-neutral-500" aria-label="Inspo path">
-                    {crumbs.map((a, i) => (
-                      <Fragment key={i}>
-                        {i > 0 && <span className="mx-1" aria-hidden="true">›</span>}
-                        <span className={i === crumbs.length - 1 ? 'text-ink' : ''}>{axisLabel(a)}</span>
-                      </Fragment>
-                    ))}
-                    {axisStack.length > 0 && <span className="ml-1.5 text-neutral-400"><Kbd>⌫</Kbd> back</span>}
-                  </span>
-                  <div className="flex items-center gap-2" role="group" aria-label="Inspo axis">
-                    {AXES.map((a) => (
+                <div className="my-2 h-px bg-neutral-300" aria-hidden="true" />
+                <div className="flex flex-col" role="group" aria-label="Inspo axis">
+                  {AXES.map((a) => {
+                    const active = inspoAxis === a.id
+                    return (
                       <button
                         key={a.id}
                         type="button"
                         onClick={() => switchAxis(a.id)}
-                        aria-pressed={inspoAxis === a.id}
-                        className={`flex items-center gap-1 font-mono text-[11px] transition-colors duration-100 focus:outline-none focus-visible:ring-1 focus-visible:ring-ink/40 ${inspoAxis === a.id ? 'text-ink' : 'text-neutral-500 hover:text-neutral-700'}`}
+                        aria-pressed={active}
+                        className={`relative flex w-full items-center justify-between rounded-sm py-[3px] pl-2.5 pr-1 font-mono text-[11px] transition-colors duration-100 focus:outline-none focus-visible:ring-1 focus-visible:ring-ink/40 ${active ? 'text-ink' : 'text-neutral-500 hover:bg-black/[0.04] hover:text-neutral-800'}`}
                       >
-                        {a.label}<Kbd>{a.key}</Kbd>
+                        <span className={`absolute left-0 top-1 bottom-1 w-0.5 rounded-full bg-ink transition-opacity duration-100 ${active ? 'opacity-100' : 'opacity-0'}`} aria-hidden="true" />
+                        {a.label}
+                        <Kbd>{a.key}</Kbd>
                       </button>
-                    ))}
-                  </div>
+                    )
+                  })}
+                  {axisStack.length > 0 && (
+                    <button type="button" onClick={axisBack} className="mt-0.5 flex w-full items-center gap-1.5 rounded-sm py-[3px] pl-2.5 pr-1 font-mono text-[11px] text-neutral-500 transition-colors duration-100 hover:bg-black/[0.04] hover:text-neutral-800 focus:outline-none focus-visible:ring-1 focus-visible:ring-ink/40">
+                      <Kbd>⌫</Kbd> back
+                    </button>
+                  )}
                 </div>
                 <span
-                  className={`font-mono text-[10px] tabular-nums text-neutral-700 ${navCount === 0 ? 'invisible' : ''}`}
+                  className={`mt-auto font-mono text-[10px] tabular-nums text-neutral-700 ${navCount === 0 ? 'invisible' : ''}`}
                   aria-live="polite"
                   title={DEV && inspoResult ? `seed ${inspoResult.batchSeed} · ${inspoResult.passing.length} of ${inspoResult.tries} passed (dev)` : undefined}
                 >
