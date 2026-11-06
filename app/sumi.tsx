@@ -9034,6 +9034,17 @@ export default function Sumi() {
   const [inspTab, setInspTab] = useState<'design' | 'motion'>('design')
   const [videoFmt, setVideoFmt] = useState<'auto' | 'webm' | 'mp4'>('auto')
   const [imgFormat, setImgFormat] = useState<'png' | 'jpeg'>('png')
+  // Copy menu rows: which one just succeeded (shows "Copied ✓" on that row
+  // for a beat) and the row buttons, for arrow-key roving focus.
+  const [copiedRow, setCopiedRow] = useState<'paper' | 'figma' | 'react' | null>(null)
+  const copyRowRefs = useRef<(HTMLButtonElement | null)[]>([])
+  useEffect(() => {
+    if (!copyOpen) return
+    setCopiedRow(null)
+    // Focus lands on the first row so ↑/↓/Enter work straight away.
+    const t = window.setTimeout(() => copyRowRefs.current[0]?.focus(), 0)
+    return () => window.clearTimeout(t)
+  }, [copyOpen, copyTab])
   const [imgScale, setImgScale] = useState(2)
   const [exportTab, setExportTab] = useState<'image' | 'video' | 'svg'>('image')
   const [startFromOpen, setStartFromOpen] = useState(true)
@@ -9845,6 +9856,114 @@ export default function Sumi() {
     setEls((list) => [...list, { id, type, v }])
     setSelectedIds([id])
   }
+
+  // ── Drag a "+ X" toolbar button onto the artboard ─────────────────────
+  // Pointer events (mouse, pen, touch alike), not the HTML5 drag API. A
+  // press is a click until the pointer travels DRAG_ADD_THRESHOLD px; past
+  // that it becomes a drag: a ghost of the would-be element rides the
+  // cursor (rendered over the artboard at the exact drop %), the artboard
+  // highlights as the target, and release places + selects the element in
+  // one undo step. Release off the artboard, or Esc mid-drag, cancels.
+  const DRAG_ADD_THRESHOLD = 4
+  const [dragAdd, setDragAdd] = useState<{ type: ElType; x: number; y: number; at: { xPct: number; yPct: number; inside: boolean } | null } | null>(null)
+  const dragAddRef = useRef<{ type: ElType; pointerId: number; startX: number; startY: number; active: boolean } | null>(null)
+  const dragAddConsumedRef = useRef(false) // swallow the click that follows a drag/cancel
+
+  // Pointer → artboard %, in the same coordinate system the x/y sliders use.
+  const artboardPct = (clientX: number, clientY: number) => {
+    const rect = svgRef.current?.getBoundingClientRect()
+    if (!rect || rect.width <= 0 || rect.height <= 0) return null
+    return {
+      xPct: ((clientX - rect.left) / rect.width) * 100,
+      yPct: ((clientY - rect.top) / rect.height) * 100,
+      inside: clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom,
+    }
+  }
+
+  // The default element of `type` centred on (xPct, yPct). Shape/text/
+  // subject store their centre; halftone/texture/ascii/image store a
+  // top-left box, so those offset by half their size.
+  const defaultElAt = (type: ElType, xPct: number, yPct: number) => {
+    const v = DEFAULTS[type](palette)
+    const r1 = (n: number) => Math.round(n * 10) / 10
+    if (type === 'shape' || type === 'text' || type === 'subject') {
+      v.x = r1(xPct)
+      v.y = r1(yPct)
+    } else {
+      const b = v as { x: number; y: number; width: number; height: number }
+      b.x = r1(xPct - b.width / 2)
+      b.y = r1(yPct - b.height / 2)
+    }
+    return v
+  }
+
+  const addElAt = (type: ElType, xPct: number, yPct: number) => {
+    if (els.length >= LAYER_CAP) return
+    genStreak.current = false
+    pushUndo() // one undo step for the whole drop
+    const id = nextId.current++
+    setEls((list) => [...list, { id, type, v: defaultElAt(type, xPct, yPct) }])
+    setSelectedIds([id])
+  }
+
+  const cancelDragAdd = () => {
+    if (dragAddRef.current?.active) dragAddConsumedRef.current = true
+    dragAddRef.current = null
+    setDragAdd(null)
+  }
+
+  const dragAddHandlers = (type: ElType) => ({
+    style: { touchAction: 'none' as const },
+    onPointerDown: (e: React.PointerEvent<HTMLButtonElement>) => {
+      if (e.button !== 0) return
+      dragAddConsumedRef.current = false
+      dragAddRef.current = { type, pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, active: false }
+      // Capture from the press, so a fast flick that leaves the button
+      // before the threshold still reports its moves here.
+      e.currentTarget.setPointerCapture(e.pointerId)
+    },
+    onPointerMove: (e: React.PointerEvent<HTMLButtonElement>) => {
+      const d = dragAddRef.current
+      if (!d || d.pointerId !== e.pointerId) return
+      if (!d.active) {
+        if (Math.hypot(e.clientX - d.startX, e.clientY - d.startY) < DRAG_ADD_THRESHOLD) return
+        d.active = true
+      }
+      setDragAdd({ type: d.type, x: e.clientX, y: e.clientY, at: artboardPct(e.clientX, e.clientY) })
+    },
+    onPointerUp: (e: React.PointerEvent<HTMLButtonElement>) => {
+      const d = dragAddRef.current
+      if (!d || d.pointerId !== e.pointerId) return
+      dragAddRef.current = null
+      if (!d.active) return // a plain click — onClick adds at the default spot
+      dragAddConsumedRef.current = true
+      setDragAdd(null)
+      const at = artboardPct(e.clientX, e.clientY)
+      if (at?.inside) addElAt(d.type, at.xPct, at.yPct)
+    },
+    onPointerCancel: () => cancelDragAdd(),
+    onClick: () => {
+      if (dragAddConsumedRef.current) {
+        dragAddConsumedRef.current = false
+        return
+      }
+      addEl(type)
+    },
+  })
+
+  // Esc cancels a drag in flight.
+  useEffect(() => {
+    if (!dragAdd) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopPropagation()
+      cancelDragAdd()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dragAdd !== null])
 
   const removeSelected = () => {
     if (selectedIds.length === 0) return
@@ -10665,18 +10784,19 @@ export default function Sumi() {
   // to find pasted SVG in the first place. Rather than one copy trying to
   // serve both and serving neither well, each target gets its own export
   // shape and its own clipboard-write strategy.
-  const copySvg = async (target: 'paper' | 'figma') => {
+  const copySvg = async (target: 'paper' | 'figma'): Promise<boolean> => {
     flash('Preparing SVG…')
     const src = await buildExportSvg({ selectionOnly: true, figmaCompat: target === 'figma' })
-    if (!src) return
+    if (!src) return false
     if (target === 'paper') {
       try {
         await navigator.clipboard.writeText(src)
         flash('SVG copied for Paper')
+        return true
       } catch {
         flash('Clipboard blocked — check permissions')
+        return false
       }
-      return
     }
     try {
       // Figma's paste handler looks for an image/svg+xml clipboard entry
@@ -10689,6 +10809,7 @@ export default function Sumi() {
         }),
       ])
       flash('SVG copied for Figma')
+      return true
     } catch {
       // Some browsers refuse a ClipboardItem write for the image/svg+xml
       // type outright (e.g. Safari) — plain text is still a real, parseable
@@ -10696,8 +10817,10 @@ export default function Sumi() {
       try {
         await navigator.clipboard.writeText(src)
         flash('SVG copied for Figma')
+        return true
       } catch {
         flash('Clipboard blocked — check permissions')
+        return false
       }
     }
   }
@@ -10937,11 +11060,11 @@ export default function Sumi() {
         ]
       })
 
-  const copyReact = async () => {
+  const copyReact = async (): Promise<boolean> => {
     setExportOpen(false)
     flash('Preparing component…')
     const src = await buildExportSvg()
-    if (!src) return
+    if (!src) return false
     const motions = collectMotions()
     const textSpanMotions = collectTextSpanMotions()
     let code: string
@@ -11276,8 +11399,10 @@ export default function Sumi() {
     try {
       await navigator.clipboard.writeText(code)
       flash(motions.length || textSpanMotions.length ? 'Animated React component copied' : 'React component copied')
+      return true
     } catch {
       flash('Clipboard blocked — check permissions')
+      return false
     }
   }
 
@@ -13244,10 +13369,10 @@ export default function Sumi() {
             <button
               key={t}
               type="button"
-              className={btn}
+              className={`${btn} select-none`}
               disabled={els.length >= LAYER_CAP}
-              title={`Add ${EL_LABEL[t].toLowerCase()} — press ${EL_KEY[t]}`}
-              onClick={() => addEl(t)}
+              title={`Add ${EL_LABEL[t].toLowerCase()} — press ${EL_KEY[t]}, or drag onto the canvas`}
+              {...dragAddHandlers(t)}
             >
               + {EL_LABEL[t]}<Kbd>{EL_KEY[t]}</Kbd>
             </button>
@@ -13382,7 +13507,32 @@ export default function Sumi() {
           {copyOpen && (
             <>
               <div className="fixed inset-0 z-[98]" onClick={() => setCopyOpen(false)} />
-              <div className="absolute right-0 top-full z-[99] mt-1.5 w-64 rounded-lg border border-neutral-300 bg-paper p-3 shadow-xl">
+              <div
+                className="absolute right-0 top-full z-[99] mt-1.5 w-80 rounded-lg border border-neutral-300 bg-paper p-3 shadow-xl"
+                role="menu"
+                aria-label="Copy"
+                onKeyDown={(e) => {
+                  // ↑/↓ move between rows · Enter copies (the focused row's
+                  // own click) · Esc closes · ←/→ flip SVG/React. Every key
+                  // stops here so the canvas shortcuts (bare letters add
+                  // elements, arrows nudge) never fire from inside a menu.
+                  e.stopPropagation()
+                  const rows = copyRowRefs.current.filter((b): b is HTMLButtonElement => !!b)
+                  const i = rows.indexOf(document.activeElement as HTMLButtonElement)
+                  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    e.preventDefault()
+                    if (rows.length === 0) return
+                    const step = e.key === 'ArrowDown' ? 1 : rows.length - 1
+                    rows[i < 0 ? (e.key === 'ArrowDown' ? 0 : rows.length - 1) : (i + step) % rows.length].focus()
+                  } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                    e.preventDefault()
+                    setCopyTab((t) => (t === 'svg' ? 'react' : 'svg'))
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault()
+                    setCopyOpen(false)
+                  }
+                }}
+              >
                 <h3 className="mb-2.5 font-mono text-[12px] font-semibold text-ink">Copy</h3>
                 <div className="flex gap-1 rounded-md bg-neutral-100 p-1">
                   {(
@@ -13394,6 +13544,7 @@ export default function Sumi() {
                     <button
                       key={t.key}
                       type="button"
+                      tabIndex={-1}
                       onClick={() => setCopyTab(t.key)}
                       aria-pressed={copyTab === t.key}
                       className={`flex-1 rounded px-1.5 py-1 font-mono text-[10.5px] transition-colors duration-100 ${
@@ -13405,51 +13556,45 @@ export default function Sumi() {
                   ))}
                 </div>
 
-                {copyTab === 'svg' && (
-                  <div className="pt-3">
-                    <p className="font-mono text-[10px] leading-relaxed text-neutral-700">
-                      Vector markup, fonts embedded. Paper and Figma need different shapes for the same fills — pick the destination.
-                    </p>
-                    <div className="mt-3 flex gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          copySvg('paper')
-                          setCopyOpen(false)
-                        }}
-                        className="flex-1 rounded border border-ink bg-ink px-3 py-1.5 font-mono text-[11px] text-paper transition-colors duration-150 hover:bg-neutral-800"
-                      >
-                        Copy for Paper
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          copySvg('figma')
-                          setCopyOpen(false)
-                        }}
-                        className="flex-1 rounded border border-ink bg-ink px-3 py-1.5 font-mono text-[11px] text-paper transition-colors duration-150 hover:bg-neutral-800"
-                      >
-                        Copy for Figma
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {copyTab === 'react' && (
-                  <div className="pt-3">
-                    <p className="font-mono text-[10px] leading-relaxed text-neutral-700">Self-contained component for a Next.js project.</p>
+                {/* Stacked menu rows — label + one-line description of what
+                    that path actually does differently (see copySvg /
+                    buildExportSvg's figmaCompat branch / copyReact). */}
+                <div className="mt-2 flex flex-col gap-0.5">
+                  {(
+                    copyTab === 'svg'
+                      ? ([
+                          { key: 'paper', label: 'Copy for Paper', desc: 'Vector shapes, fonts embedded', run: () => copySvg('paper') },
+                          { key: 'figma', label: 'Copy for Figma', desc: 'Pattern fills baked to tiles, Figma-safe', run: () => copySvg('figma') },
+                        ] as const)
+                      : ([{ key: 'react', label: 'Copy component', desc: 'Self-contained component, fonts embedded', run: copyReact }] as const)
+                  ).map((row, i) => (
                     <button
-                      type="button"
-                      onClick={() => {
-                        copyReact()
-                        setCopyOpen(false)
+                      key={row.key}
+                      ref={(n) => {
+                        copyRowRefs.current[i] = n
                       }}
-                      className="mt-3 w-full rounded border border-ink bg-ink px-3 py-1.5 font-mono text-[11px] text-paper transition-colors duration-150 hover:bg-neutral-800"
+                      type="button"
+                      role="menuitem"
+                      onClick={async () => {
+                        const ok = await row.run()
+                        if (!ok) return
+                        setCopiedRow(row.key)
+                        window.setTimeout(() => setCopiedRow((cur) => (cur === row.key ? null : cur)), 1600)
+                      }}
+                      className="group flex w-full items-center gap-3 rounded-md px-2.5 py-2 text-left transition-colors duration-100 hover:bg-black/[0.05] focus:outline-none focus-visible:bg-black/[0.05] focus-visible:ring-1 focus-visible:ring-ink/40"
                     >
-                      Copy component
+                      <span className="min-w-0 flex-1">
+                        <span className="block font-mono text-[11px] text-ink">{row.label}</span>
+                        <span className="block truncate font-mono text-[10px] leading-4 text-neutral-800">{row.desc}</span>
+                      </span>
+                      {copiedRow === row.key ? (
+                        <span className="shrink-0 font-mono text-[10px] text-ink">Copied ✓</span>
+                      ) : (
+                        <span className="shrink-0 font-mono text-[10px] text-neutral-500 opacity-0 transition-opacity duration-100 group-hover:opacity-100 group-focus-visible:opacity-100">↵</span>
+                      )}
                     </button>
-                  </div>
-                )}
+                  ))}
+                </div>
               </div>
             </>
           )}
@@ -14148,6 +14293,35 @@ export default function Sumi() {
             )}
           </svg>
 
+          {/* Drag-to-add: the would-be element ghosted at its exact drop
+              point (same %-space as the x/y sliders) plus a target ring on
+              the artboard. Off the artboard the ring dims to say "not here". */}
+          {dragAdd && (
+            <>
+              {dragAdd.at?.inside && (
+                <div className="pointer-events-none absolute inset-0 opacity-60" aria-hidden="true">
+                  <PreviewCanvas
+                    ns="-ghost"
+                    page={{
+                      els: [{ id: -1, type: dragAdd.type, v: defaultElAt(dragAdd.type, dragAdd.at.xPct, dragAdd.at.yPct) }],
+                      bg: 'none',
+                      texture: false,
+                      seed,
+                      w: view.w,
+                      h: view.h,
+                    }}
+                  />
+                </div>
+              )}
+              <div
+                className={`pointer-events-none absolute inset-0 transition-colors duration-100 ${
+                  dragAdd.at?.inside ? 'ring-2 ring-inset ring-[#e13834]' : 'ring-2 ring-inset ring-[#e13834]/30'
+                }`}
+                aria-hidden="true"
+              />
+            </>
+          )}
+
           {/* Selection overlay — portaled to <body> so it renders in fixed,
               viewport space rather than inside `main`. `main` needs
               overflow-auto for zoom/scroll, and that ancestor clips this
@@ -14302,6 +14476,18 @@ export default function Sumi() {
           rootRef.current,
           )}
           </div>
+
+          {/* Drag-to-add cursor chip — names what's being carried while the
+              pointer is off the artboard (on it, the ghost element says it). */}
+          {dragAdd && !dragAdd.at?.inside && (
+            <div
+              className="pointer-events-none fixed z-[200] -translate-x-1/2 -translate-y-[140%] rounded border border-neutral-400 bg-paper/95 px-2 py-1 font-mono text-[11px] text-ink shadow-lg"
+              style={{ left: dragAdd.x, top: dragAdd.y }}
+              aria-hidden="true"
+            >
+              {EL_GLYPH[dragAdd.type]} {EL_LABEL[dragAdd.type]}
+            </div>
+          )}
 
           {/* Bottom-left corner of the workspace — off the artwork */}
           {toast && (
