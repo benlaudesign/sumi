@@ -75,6 +75,7 @@ export const SHORTCUTS: Shortcut[] = [
   S('inspo', 'Sumi', 'Inspo', [{ code: 'KeyR' }], { hint: 'toggle' }),
   S('inspoMore', 'Sumi', 'More Inspo', [{ code: 'KeyM' }], { hint: 'while open' }),
   S('export', 'Sumi', 'Export', [{ code: 'KeyE', mods: ['mod'] }]),
+  S('overview', 'Sumi', 'Pages overview', [{ code: 'KeyO' }], { hint: 'overview layout' }),
   S('cheatSheet', 'Sumi', 'Keyboard shortcuts', [{ code: 'Slash', mods: ['shift'], label: '?' }]),
 ]
 
