@@ -21,7 +21,7 @@ import { INSPO_NAV, INSPO_NAV_VARIANTS, type FilmstripControls, type InspectorBe
 import { CheatSheet } from '../src/components/CheatSheet'
 import { isMacPlatform, matchShortcut, shortcutChips } from '../src/config/shortcuts'
 import { BUILTIN_FONTS, CURATED_FONTS, fontCssHref, fontLinkId } from '../src/config/fonts'
-import { LAYOUT, LAYOUT_VARIANTS, MIN_EDITOR_WIDTH, type LayoutVariant } from '../src/config/layout'
+import { MIN_EDITOR_WIDTH } from '../src/config/layout'
 import { runInspo, type InspoContext, type InspoEl, type InspoMode, type InspoPage, type InspoResult, type Scored } from '../src/inspo'
 
 // ── Canvas ────────────────────────────────────────────────────────────────
@@ -9232,7 +9232,6 @@ function SumiEditor() {
   const [exportTab, setExportTab] = useState<'image' | 'video' | 'svg'>('image')
   const [startFromOpen, setStartFromOpen] = useState(true)
   const [frameOpen, setFrameOpen] = useState(false)
-  const [surfaceFxOpen, setSurfaceFxOpen] = useState(false)
   // Character selection inside the inspector's text field (range styling).
   const [textSel, setTextSel] = useState<{ el: number; start: number; end: number } | null>(null)
   // Preview mode — isolate designs on a pure backdrop; ←/→ cycles, Esc exits.
@@ -9779,9 +9778,9 @@ function SumiEditor() {
 
   // Strips clip + border; furniture layers stay on the page as ordinary,
   // no-longer-tagged layers rather than being deleted.
-  const removeFrame = () => {
+  const removeFrame = (ask = true) => {
     if (!frame) return
-    if (!window.confirm('Remove the frame? Furniture pieces stay on the page as normal layers.')) return
+    if (ask && !window.confirm('Remove the frame? Furniture pieces stay on the page as normal layers.')) return
     pushUndo()
     setEls((list) => list.map((e) => (e.frameFurniture ? { ...e, frameFurniture: false, frameSlot: undefined } : e)))
     setFrame(null)
@@ -12807,7 +12806,7 @@ function SumiEditor() {
   // One source rendered three ways: 'full' is the original inspector;
   // 'compact' folds the sections and shrinks the palette to a chip row;
   // the pageleft/starter layouts render 'compact' in the LEFT sidebar.
-  const canvasSettings = (mode: 'full' | 'compact', header: boolean) => {
+  const canvasSettings = () => {
     const frameBody = (
       <>
                 {(() => {
@@ -12931,49 +12930,26 @@ function SumiEditor() {
                 <DSlider label="grain" value={pressGrain} onChange={(x) => { pushUndoCoalesced('grain'); setPressGrain(x) }} min={0} max={1} step={0.01} />
       </>
     )
-    const borderBody = (
+    const borderBody = frame ? (
       <>
-                {!frame ? (
-                  <div className="px-1 py-1">
-                    <button type="button" className={DBTN} onClick={applyFrame}>
-                      Apply Stamp frame
-                    </button>
-                    <p className="mt-1.5 text-[10px] leading-4 text-white/40">
-                      Clips the composition to a perforated paper field and adds editable furniture — denomination, label, year, seal.
-                    </p>
-                  </div>
-                ) : (
-                  <>
-                    <div className="flex items-center justify-between px-1 py-1">
-                      <DSelect label="preset" value={frame.preset} options={FRAME_PRESET_NAMES} onChange={(x) => updateFrame({ preset: x })} />
-                      <button
-                        type="button"
-                        title="Remove the frame — furniture pieces stay on the page as normal layers"
-                        onClick={removeFrame}
-                        className="ml-2 shrink-0 font-mono text-[9px] lowercase text-white/40 transition-colors duration-100 hover:text-white/80"
-                      >
-                        ↺ remove
-                      </button>
-                    </div>
-                    <DSlider label="perf size" value={frame.perfRadius} onChange={(n) => updateFrame({ perfRadius: n })} min={2} max={10} step={0.5} />
-                    <DSlider label="perf density" value={frame.perfSpacing} onChange={(n) => updateFrame({ perfSpacing: n })} min={10} max={40} step={1} />
-                    <DSlider label="inset" value={frame.inset} onChange={(n) => updateFrame({ inset: n })} min={4} max={80} step={1} />
-                    <DColor label="paper" value={frame.paperTone} onChange={(x) => updateFrame({ paperTone: x })} allowGradient />
-                    <p className="mb-0.5 mt-1.5 px-1 font-mono text-[9px] uppercase tracking-[0.18em] text-white/35">Furniture</p>
-                    <DToggle label="numeral" checked={frame.furnitureNumeral} onChange={(x) => setFurnitureSlot('numeral', x)} />
-                    <DToggle label="label" checked={frame.furnitureLabel} onChange={(x) => setFurnitureSlot('label', x)} />
-                    <DToggle label="year" checked={frame.furnitureYear} onChange={(x) => setFurnitureSlot('year', x)} />
-                    <DToggle label="seal" checked={frame.furnitureSeal} onChange={(x) => setFurnitureSlot('seal', x)} />
-                    <p className="mb-0.5 mt-1.5 px-1 font-mono text-[9px] uppercase tracking-[0.18em] text-white/35">Overlays</p>
-                    <DToggle label="postmark" checked={frame.postmark} onChange={(x) => updateFrame({ postmark: x })} />
-                    {frame.postmark && (
-                      <DSlider label="rotation" value={frame.postmarkRotation} onChange={(n) => updateFrame({ postmarkRotation: n })} min={-45} max={45} step={1} unit="°" />
-                    )}
-                    <DToggle label="hanko" checked={frame.hanko} onChange={(x) => updateFrame({ hanko: x })} />
-                  </>
-                )}
+        <DSelect label="preset" value={frame.preset} options={FRAME_PRESET_NAMES} onChange={(x) => updateFrame({ preset: x })} />
+        <DSlider label="perf size" value={frame.perfRadius} onChange={(n) => updateFrame({ perfRadius: n })} min={2} max={10} step={0.5} />
+        <DSlider label="perf density" value={frame.perfSpacing} onChange={(n) => updateFrame({ perfSpacing: n })} min={10} max={40} step={1} />
+        <DSlider label="inset" value={frame.inset} onChange={(n) => updateFrame({ inset: n })} min={4} max={80} step={1} />
+        <DColor label="paper" value={frame.paperTone} onChange={(x) => updateFrame({ paperTone: x })} allowGradient />
+        <p className="mb-0.5 mt-1.5 px-1 font-mono text-[9px] uppercase tracking-[0.18em] text-white/35">Furniture</p>
+        <DToggle label="numeral" checked={frame.furnitureNumeral} onChange={(x) => setFurnitureSlot('numeral', x)} />
+        <DToggle label="label" checked={frame.furnitureLabel} onChange={(x) => setFurnitureSlot('label', x)} />
+        <DToggle label="year" checked={frame.furnitureYear} onChange={(x) => setFurnitureSlot('year', x)} />
+        <DToggle label="seal" checked={frame.furnitureSeal} onChange={(x) => setFurnitureSlot('seal', x)} />
+        <p className="mb-0.5 mt-1.5 px-1 font-mono text-[9px] uppercase tracking-[0.18em] text-white/35">Overlays</p>
+        <DToggle label="postmark" checked={frame.postmark} onChange={(x) => updateFrame({ postmark: x })} />
+        {frame.postmark && (
+          <DSlider label="rotation" value={frame.postmarkRotation} onChange={(n) => updateFrame({ postmarkRotation: n })} min={-45} max={45} step={1} unit="°" />
+        )}
+        <DToggle label="hanko" checked={frame.hanko} onChange={(x) => updateFrame({ hanko: x })} />
       </>
-    )
+    ) : null
     const paletteGrid = (
       <>
                 {(
@@ -12991,7 +12967,10 @@ function SumiEditor() {
                           type="button"
                           title={name}
                           aria-label={`Palette: ${name}`}
-                          onClick={() => applyPalette(name)}
+                          onClick={() => {
+                            applyPalette(name)
+                            setPaletteOpen(false)
+                          }}
                           className={`flex w-full flex-col gap-1.5 rounded border p-1 transition-colors duration-100 ${
                             name === paletteName
                               ? 'border-white ring-1 ring-white/70'
@@ -13014,77 +12993,81 @@ function SumiEditor() {
       </>
     )
     const printActive = texture || !!bgGrad?.on || overprint || pressGrain > 0
-    const activeGroup: [string, Record<string, Palette>] = paletteName in EXPRESSIVE_PALETTES ? ['Expressive', EXPRESSIVE_PALETTES] : ['Restrained', PALETTES]
-    const paletteChips = (
-      <div className="px-1">
-        <div className="flex flex-wrap items-center gap-1.5">
-          {Object.entries(activeGroup[1]).map(([name, pp]) => (
-            <Tip key={name} tip={name}>
-              <button
-                type="button"
-                aria-label={`Palette: ${name}`}
-                aria-pressed={name === paletteName}
-                onClick={() => applyPalette(name)}
-                className={`flex h-5 w-9 overflow-hidden rounded border transition-colors duration-100 ${name === paletteName ? 'border-white ring-1 ring-white/70' : 'border-white/15 hover:border-white/40'}`}
-                style={{ gap: 1 }}
-              >
-                {[pp.paper, pp.ink, pp.accent, pp.alt].map((c, i) => (
-                  <span key={i} className="h-full flex-1" style={{ backgroundColor: c }} />
-                ))}
-              </button>
-            </Tip>
-          ))}
-          <button type="button" onClick={() => setPaletteMore((m) => !m)} className="font-mono text-[10px] text-white/45 hover:text-white/80" aria-expanded={paletteMore}>
-            {paletteMore ? 'less' : 'more'}
-          </button>
-        </div>
-        <p className="mt-1 text-[9.5px] leading-4 text-white/40">{activeGroup[0]} · {paletteName}</p>
-      </div>
+    const active = ALL_PALETTES[paletteName] ?? PALETTES['Tokens']
+    const swatches = (pp: Palette, cls: string) => (
+      <span className={`flex overflow-hidden rounded-[2px] ${cls}`} style={{ gap: 1 }}>
+        {[pp.paper, pp.ink, pp.accent, pp.alt].map((c, i) => (
+          <span key={i} className="h-full flex-1" style={{ backgroundColor: c }} />
+        ))}
+      </span>
     )
-    const head = header ? (
+    return (
       <>
         <p className="mb-2 px-1 font-mono text-[12px] text-white">Canvas</p>
         <p className="mb-2 px-1 text-[11px] leading-4 text-white/50">Click any element to edit it; empty canvas comes back here.</p>
-      </>
-    ) : null
-    if (mode === 'full')
-      return (
-        <>
-          {head}
-          <Section title="Frame">{frameBody}</Section>
-          <Section title="Surface">
-            {surfaceCore}
-            {/* Treatments fold away — a dot marks any active one */}
+
+        <Section title="Frame">{frameBody}</Section>
+
+        {/* Border — none / stamp. Stamp's dials nest under the select. */}
+        <Section title="Border">
+          <DSelect
+            label="border"
+            value={frame ? 'stamp' : 'none'}
+            options={['none', 'stamp']}
+            onChange={(x) => {
+              if (x === 'stamp') applyFrame()
+              else removeFrame(false)
+            }}
+          />
+          {frame && (
+            <div className="ml-1 border-l border-white/10 pl-2">
+              <Fold title="Stamp" open={stampOpen} onToggle={() => setStampOpen((o) => !o)}>
+                {borderBody}
+              </Fold>
+            </div>
+          )}
+        </Section>
+
+        <Section title="Surface">{surfaceCore}</Section>
+
+        {/* Palette — one row; the grid lives in a popover. */}
+        <Section title="Palette">
+          <div className="relative px-1">
             <button
               type="button"
-              onClick={() => setSurfaceFxOpen((o) => !o)}
-              className="mb-0.5 mt-1 flex w-full items-center justify-between px-1 font-mono text-[10px] uppercase tracking-[0.18em] text-white/45 transition-colors duration-100 hover:text-white/70"
+              onClick={() => setPaletteOpen((o) => !o)}
+              aria-expanded={paletteOpen}
+              aria-haspopup="dialog"
+              className={`${ROW} w-full rounded border border-white/15 px-2 transition-colors duration-100 hover:border-white/40`}
             >
-              <span className="flex items-center gap-1.5">
-                Print &amp; texture
-                {printActive && <span className="h-1 w-1 rounded-full bg-[#e13834]" aria-label="active" />}
-              </span>
-              <span aria-hidden="true">{surfaceFxOpen ? '▾' : '▸'}</span>
+              <span className={ROW_LABEL}>palette</span>
+              {swatches(active, 'h-4 w-14 shrink-0')}
+              <span className="min-w-0 flex-1 truncate text-left font-mono text-[11px] text-white/90">{paletteName}</span>
+              <span className="font-mono text-[10px] text-white/45" aria-hidden="true">{paletteOpen ? '▴' : '▾'}</span>
             </button>
-            {surfaceFxOpen && printFx}
-          </Section>
-          <Section title="Border">{borderBody}</Section>
-          <Section title="Palette">{paletteGrid}</Section>
-        </>
-      )
-    return (
-      <>
-        {head}
-        <Fold title="Frame" open={folds.frame} onToggle={() => toggleFold('frame')}>{frameBody}</Fold>
-        <Fold title="Surface" open={folds.surface} onToggle={() => toggleFold('surface')}>{surfaceCore}</Fold>
-        <Fold title="Print & texture" open={folds.print} onToggle={() => toggleFold('print')} badge={printActive || !!frame}>
+            {paletteOpen && (
+              <>
+                <div className="fixed inset-0 z-[98]" onClick={() => setPaletteOpen(false)} />
+                <div
+                  role="dialog"
+                  aria-label="Choose a palette"
+                  tabIndex={-1}
+                  ref={(n) => n?.focus()}
+                  onKeyDown={(e) => {
+                    e.stopPropagation()
+                    if (e.key === 'Escape') setPaletteOpen(false)
+                  }}
+                  className="absolute left-1 right-1 top-full z-[99] mt-1 max-h-[60vh] overflow-y-auto rounded-lg border border-white/15 bg-[#2a2a2a] p-2 shadow-2xl outline-none"
+                >
+                  {paletteGrid}
+                </div>
+              </>
+            )}
+          </div>
+        </Section>
+
+        <Fold title="Print & texture" open={printOpen} onToggle={() => setPrintOpen((o) => !o)} badge={printActive}>
           {printFx}
-          <p className="mb-0.5 mt-2 px-1 font-mono text-[9px] uppercase tracking-[0.18em] text-white/35">Stamp frame</p>
-          {borderBody}
-        </Fold>
-        <Fold title="Palette" open={folds.palette} onToggle={() => toggleFold('palette')}>
-          {paletteChips}
-          {paletteMore && <div className="mt-2">{paletteGrid}</div>}
         </Fold>
       </>
     )
@@ -13145,25 +13128,10 @@ function SumiEditor() {
   }, [])
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const thumbRefs = useRef<(HTMLButtonElement | null)[]>([])
-  // ── Layout variants (dev-only DialKit panel; freeze in src/config/layout.ts) ──
-  const [layoutDefault] = useState<LayoutVariant>(() => {
-    const q = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('layout') : null
-    return LAYOUT_VARIANTS.includes(q as LayoutVariant) ? (q as LayoutVariant) : LAYOUT.variant
-  })
-  const lay = useDialKit('Layout', {
-    layout: { type: 'select', options: LAYOUT_VARIANTS, default: layoutDefault },
-    inspectorTheme: { type: 'select', options: ['dark', 'light'], default: LAYOUT.inspectorTheme },
-    panelWidth: [LAYOUT.panelWidth, 260, 420, 4],
-    slideIn: { type: 'select', options: ['overlay', 'shift'], default: LAYOUT.slideIn },
-  })
-  const layoutVariant = lay.layout as LayoutVariant
-  const pageLeft = layoutVariant === 'pageleft' || layoutVariant === 'starter'
-  const inspectorLight = lay.inspectorTheme === 'light'
-  // The light theme remaps Tailwind's white token inside the panel.
-  const inspectorVars = (inspectorLight ? { '--color-white': '#2b2b2b' } : {}) as React.CSSProperties
-  const [folds, setFolds] = useState({ frame: true, surface: true, print: false, palette: false })
-  const toggleFold = (k: keyof typeof folds) => setFolds((f) => ({ ...f, [k]: !f[k] }))
-  const [paletteMore, setPaletteMore] = useState(false)
+  // Canvas panel collapsibles: Print & texture closed by default, stamp controls open.
+  const [printOpen, setPrintOpen] = useState(false)
+  const [stampOpen, setStampOpen] = useState(true)
+  const [paletteOpen, setPaletteOpen] = useState(false)
   const [navIdx, setNavIdx] = useState(0) // 0 = original, 1..n = shown candidates
   const [previewEls, setPreviewEls] = useState<El[] | null>(null)
   const [fadeFrom, setFadeFrom] = useState<{ key: number; page: PageState } | null>(null)
@@ -14271,7 +14239,7 @@ function SumiEditor() {
         </section>
       )}
 
-      <div className="relative flex min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1">
         {/* ── Left pane: pages, layers, saved slots ── */}
         {!uiHidden && (
         <aside className="flex w-56 shrink-0 flex-col gap-5 overflow-y-auto border-r border-neutral-300 bg-paper p-3">
@@ -14329,12 +14297,6 @@ function SumiEditor() {
               ))}
             </ul>
           </section>
-          {pageLeft && (
-            <section data-inspector="light" style={{ '--color-white': '#2b2b2b' } as React.CSSProperties}>
-              <h2 className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">Page</h2>
-              <div className="mt-1.5">{canvasSettings('compact', false)}</div>
-            </section>
-          )}
 
           <section className="min-h-0">
             <h2 className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">Layers</h2>
@@ -14837,54 +14799,6 @@ function SumiEditor() {
               />
             )}
           </svg>
-
-          {/* Starter layout: an empty page offers four presets + Inspo on the artboard. */}
-          {layoutVariant === 'starter' && els.length === 0 && !previewEls && !inspoOpen && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-6" onPointerDown={(e) => e.stopPropagation()}>
-              <p className="font-mono text-[11px] text-neutral-700">Start from</p>
-              <div className="flex flex-wrap items-start justify-center gap-3">
-                {(
-                  [
-                    ['Hinomaru', 'shape', 'Hinomaru'],
-                    ['Tategaki column', 'text', 'Tategaki column'],
-                    ['Massive character', 'text', 'Massive character'],
-                    ['Seigaiha', 'shape', 'Seigaiha'],
-                  ] as const
-                ).map(([label, type, preset]) => {
-                  const v = deepMerge(DEFAULTS[type](palette), PRESETS[type][preset](palette))
-                  return (
-                    <button
-                      key={label}
-                      type="button"
-                      onClick={() => {
-                        genStreak.current = false
-                        pushUndo()
-                        const id = nextId.current++
-                        setEls([{ id, type, v }])
-                        setSelectedIds([id])
-                      }}
-                      className="group flex w-[88px] flex-col items-center gap-1.5 rounded text-center focus:outline-none focus-visible:ring-2 focus-visible:ring-red"
-                    >
-                      <div className="w-full overflow-hidden rounded border border-neutral-300 bg-paper shadow-sm transition-[box-shadow,border-color] duration-150 group-hover:border-neutral-600 group-hover:shadow-md" style={{ aspectRatio: `${view.w} / ${view.h}` }}>
-                        <PreviewCanvas page={{ els: [{ id: 1, type, v }], bg, texture: false, seed, w: view.w, h: view.h }} ns={`-st-${preset.replace(/\s/g, '')}`} />
-                      </div>
-                      <span className="font-mono text-[10px] text-neutral-700">{label}</span>
-                    </button>
-                  )
-                })}
-                <button
-                  type="button"
-                  onClick={openInspo}
-                  className="group flex w-[88px] flex-col items-center gap-1.5 rounded text-center focus:outline-none focus-visible:ring-2 focus-visible:ring-red"
-                >
-                  <div className="flex w-full items-center justify-center rounded border border-dashed border-neutral-400 bg-paper font-mono text-[11px] text-neutral-700 transition-colors duration-150 group-hover:border-neutral-600 group-hover:text-ink" style={{ aspectRatio: `${view.w} / ${view.h}` }}>
-                    Inspo<Kbd>r</Kbd>
-                  </div>
-                  <span className="font-mono text-[10px] text-neutral-700">Let it propose</span>
-                </button>
-              </div>
-            </div>
-          )}
 
           {/* Inspo crossfade: the page that was showing fades out over the new one. */}
           {fadeFrom && (
@@ -15574,21 +15488,9 @@ function SumiEditor() {
         {!uiHidden && !(filmstripOpen && inspectorBehaviour === 'collapse') && (
         <div
           inert={filmstripOpen && inspectorBehaviour === 'dim'}
-          className={`${pageLeft && lay.slideIn === 'overlay' ? 'absolute inset-y-0 right-0 z-[60] shadow-2xl' : 'shrink-0 overflow-hidden'} ${filmstripOpen && inspectorBehaviour === 'dim' ? 'pointer-events-none opacity-40 transition-opacity duration-200' : 'transition-opacity duration-200'}`}
-          style={
-            pageLeft
-              ? lay.slideIn === 'overlay'
-                ? { width: lay.panelWidth, transform: selectedIds.length > 0 ? 'translateX(0)' : 'translateX(100%)', transition: 'transform 220ms ease' }
-                : { width: selectedIds.length > 0 ? lay.panelWidth : 0, transition: 'width 220ms ease' }
-              : { width: lay.panelWidth }
-          }
-          aria-hidden={pageLeft && selectedIds.length === 0}
+          className={`w-80 shrink-0 overflow-hidden transition-opacity duration-200 ${filmstripOpen && inspectorBehaviour === 'dim' ? 'pointer-events-none opacity-40' : ''}`}
         >
-        <aside
-          data-inspector={lay.inspectorTheme}
-          className={`h-full shrink-0 overflow-y-auto p-3 ${inspectorLight ? 'border-l border-neutral-300 bg-paper' : 'bg-[#212121]'}`}
-          style={{ width: lay.panelWidth, ...inspectorVars }}
-        >
+        <aside data-inspector="dark" className="h-full w-80 shrink-0 overflow-y-auto bg-[#212121] p-3">
           {selectedIds.length > 1 ? (
             <>
               <div className="mb-3 flex items-center gap-2 px-1">
@@ -16505,7 +16407,7 @@ function SumiEditor() {
             </>
           ) : (
             <>
-              {canvasSettings(layoutVariant === 'compact' ? 'compact' : 'full', true)}
+              {canvasSettings()}
             </>
           )}
         </aside>
