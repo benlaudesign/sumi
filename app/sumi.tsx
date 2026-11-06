@@ -9,10 +9,11 @@
  * plain React state and native controls.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { FEATURES } from '../src/config/features'
 import { Kbd } from '../src/components/Kbd'
+import { MIN_EDITOR_WIDTH } from '../src/config/layout'
 
 // ── Canvas ────────────────────────────────────────────────────────────────
 
@@ -8765,7 +8766,56 @@ interface Snapshot {
   selectedIds: number[]
 }
 
+// ── Desktop-only gate ─────────────────────────────────────────────────────
+// Width alone decides (no UA sniffing). The editor mounts the first time
+// the viewport is at least MIN_EDITOR_WIDTH wide and then STAYS mounted —
+// hidden behind the notice if the window shrinks mid-session — so page
+// state survives a resize and the editor comes straight back when the
+// window is wide enough again. On load below the breakpoint it never
+// mounts at all.
+const wideQuery = () => window.matchMedia(`(min-width: ${MIN_EDITOR_WIDTH}px)`)
+const subscribeWide = (cb: () => void) => {
+  const mq = wideQuery()
+  mq.addEventListener('change', cb)
+  return () => mq.removeEventListener('change', cb)
+}
+const getWide = () => wideQuery().matches
+const getWideServer = () => false // SSR / first hydration pass: render nothing, decide on the client
+
+function DesktopOnlyNotice() {
+  return (
+    <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center gap-5 bg-paper px-6 text-center font-mono text-ink">
+      <span className="flex items-center gap-2 font-sans text-[15px] font-medium">
+        <span className="h-2.5 w-2.5 rounded-full bg-red" aria-hidden="true" />
+        Sumi
+      </span>
+      <div className="space-y-1.5">
+        <p className="text-[12px]">Sumi only works on desktop for now.</p>
+        <p className="text-[11px] text-muted">Open it on a larger screen to start designing.</p>
+      </div>
+    </div>
+  )
+}
+
 export default function Sumi() {
+  const wide = useSyncExternalStore(subscribeWide, getWide, getWideServer)
+  // Latches the first time the viewport is wide enough (derived state set
+  // during render — React's sanctioned pattern, no effect needed).
+  const [mounted, setMounted] = useState(false)
+  if (wide && !mounted) setMounted(true)
+  return (
+    <>
+      {mounted && (
+        <div className={wide ? 'contents' : 'hidden'} aria-hidden={!wide} inert={!wide}>
+          <SumiEditor />
+        </div>
+      )}
+      {!wide && <DesktopOnlyNotice />}
+    </>
+  )
+}
+
+function SumiEditor() {
   const initialPalette = PALETTES['Tokens']
   const [els, setEls] = useState<El[]>([{ id: 1, type: 'shape', v: defShape(initialPalette) }])
   const [selectedIds, setSelectedIds] = useState<number[]>([1])
