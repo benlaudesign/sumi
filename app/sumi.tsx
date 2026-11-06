@@ -9141,7 +9141,6 @@ function SumiEditor() {
   const staticSilhouetteLookup = useCallback((id: number) => staticSubjectSilhouette.current.get(id), [])
   const [selBoxes, setSelBoxes] = useState<{ id: number; x: number; y: number; w: number; h: number }[]>([])
   const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
-  const [editing, setEditing] = useState<{ id: number; left: number; top: number } | null>(null)
   // Alignment hairlines shown while dragging (canvas centre + element centres).
   const [guides, setGuides] = useState<{ axis: 'v' | 'h'; at: number }[]>([])
   const [renamingPage, setRenamingPage] = useState<string | null>(null)
@@ -9336,7 +9335,18 @@ function SumiEditor() {
   const [startFromOpen, setStartFromOpen] = useState(true)
   const [frameOpen, setFrameOpen] = useState(false)
   // Character selection inside the inspector's text field (range styling).
-  const [textSel, setTextSel] = useState<{ el: number; start: number; end: number } | null>(null)
+  // ── Character mode: select glyphs on the canvas, style them from a
+  // floating toolbar. Ranges/emphasis are stored and rendered exactly as
+  // before; this is only a different way of choosing which characters.
+  const [charMode, setCharMode] = useState<number | null>(null) // text element id
+  const [charSel, setCharSel] = useState<{ start: number; end: number } | null>(null)
+  const [charHover, setCharHover] = useState<number | null>(null)
+  const [charPop, setCharPop] = useState<'color' | 'bg' | 'emphasis' | null>(null)
+  // Per-glyph geometry: polygon in artboard units (for the overlay) and the
+  // screen box (for the toolbar's placement).
+  const [charGlyphs, setCharGlyphs] = useState<{ i: number; pts: string; sx: number; sy: number; sw: number; sh: number }[]>([])
+  const charAnchor = useRef<number | null>(null)
+  const charDragging = useRef(false)
   // Preview mode — isolate designs on a pure backdrop; ←/→ cycles, Esc exits.
   const [preview, setPreview] = useState(false)
   const [previewIdx, setPreviewIdx] = useState(0)
@@ -12175,10 +12185,8 @@ function SumiEditor() {
     const svg = svgRef.current
     if (!svg) return
     e.stopPropagation()
-    // preventDefault suppresses the browser's focus transfer, so the inline
-    // text editor's onBlur never fires — close it explicitly.
+    // preventDefault suppresses the browser's focus transfer.
     e.preventDefault()
-    setEditing(null)
     const el = els.find((x) => x.id === id)
     if (!el || el.locked) return
     // Shift-click toggles the element in/out of the selection, no drag.
@@ -12361,7 +12369,6 @@ function SumiEditor() {
     if (!svg) return
     e.stopPropagation()
     e.preventDefault()
-    setEditing(null)
     const el = els.find((x) => x.id === id)
     if (!el || !('rotation' in el.v)) return
     const box = selBoxes.find((b) => b.id === id)
@@ -12402,9 +12409,7 @@ function SumiEditor() {
     const svg = svgRef.current
     if (!svg) return
     // Same as startDrag: preventDefault blocks the focus change that would
-    // blur the inline text editor, so close it explicitly.
     e.preventDefault()
-    setEditing(null)
     const rect = svg.getBoundingClientRect()
     const kx = view.w / rect.width
     const ky = view.h / rect.height
@@ -12497,6 +12502,7 @@ function SumiEditor() {
   }
   const cheatOpenRef = useRef(false)
   cheatOpenRef.current = cheatOpen
+  const charModeRef = useRef<{ active: boolean; enter: () => void; exit: () => void; selectAll: () => void }>({ active: false, enter: () => {}, exit: () => {}, selectAll: () => {} })
   const inspoNavRef = useRef<{ active: boolean; canBack: boolean; step: (d: -1 | 1) => void; keep: () => void; cancel: () => void; more: () => void; save: () => void; home: () => void; axis: (a: InspoAxis) => void; back: () => void }>({ active: false, canBack: false, step: () => {}, keep: () => {}, cancel: () => {}, more: () => {}, save: () => {}, home: () => {}, axis: () => {}, back: () => {} })
   const macRef = useRef(mac)
   macRef.current = mac
@@ -12649,6 +12655,26 @@ function SumiEditor() {
           return
         }
       }
+      // Character mode: Esc leaves it, ⌘A selects every glyph, and the
+      // destructive keys are swallowed so a stray Backspace never deletes
+      // the layer being styled.
+      const cm = charModeRef.current
+      if (cm.active) {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          cm.exit()
+          return
+        }
+        if ((e.metaKey || e.ctrlKey) && e.code === 'KeyA' && !e.altKey && !e.shiftKey) {
+          e.preventDefault()
+          cm.selectAll()
+          return
+        }
+        if (e.code === 'Backspace' || e.code === 'Delete' || e.code === 'Enter') {
+          e.preventDefault()
+          return
+        }
+      }
       // The cheat sheet is modal: Esc or ? closes it, nothing else fires.
       if (cheatOpenRef.current) {
         const scm = matchShortcut(e, macRef.current)
@@ -12680,6 +12706,7 @@ function SumiEditor() {
         case 'duplicate': copyRef.current(true); break
         case 'delete': removeSelectedRef.current(); break
         case 'selectAll': act.selectAll(); break
+        case 'styleChars': charModeRef.current.enter(); break
         case 'escape':
           if (cropCancelRef.current()) break
           if (inspoRef.current.close()) break
@@ -12771,21 +12798,6 @@ function SumiEditor() {
       window.removeEventListener('blur', onBlur)
     }
   }, [])
-
-  // Double-click a text element → inline editor floats over it on the canvas.
-  const openTextEditor = (id: number) => {
-    const el = els.find((x) => x.id === id)
-    const svg = svgRef.current
-    if (!el || el.type !== 'text' || !svg) return
-    const rect = svg.getBoundingClientRect()
-    const v = el.v as TextV
-    setEditing({
-      id,
-      left: rect.left + (v.x / 100) * rect.width,
-      top: rect.top + (v.y / 100) * rect.height,
-    })
-  }
-
 
   // ── Canvas settings (no selection): Frame, Surface, Border, Palette ──
   // One source rendered three ways: 'full' is the original inspector;
@@ -13480,9 +13492,11 @@ function SumiEditor() {
   // Range styling — valid only while the stored selection still matches the
   // selected element and fits its current text.
   const activeSel =
-    textSel && tv && selected && textSel.el === selected.id && textSel.end <= tv.text.length && textSel.end > textSel.start
-      ? textSel
+    charMode !== null && charSel && tv && selected && charMode === selected.id && charSel.end <= tv.text.length && charSel.end > charSel.start
+      ? { el: charMode, ...charSel }
       : null
+  const selStyles = activeSel && tv ? segmentText(tv.text, tv.ranges ?? []).filter((sg) => sg.end > activeSel.start && sg.start < activeSel.end) : []
+  const selCommon = (k: 'color' | 'bg'): string | null => (selStyles.length && selStyles.every((sg) => sg.s[k] === selStyles[0].s[k]) ? selStyles[0].s[k] ?? null : null)
   const selAllBold = !!(
     activeSel &&
     tv &&
@@ -13506,7 +13520,154 @@ function SumiEditor() {
     } else {
       next = normalizeRanges(tv.text, [...cur, { start: activeSel.start, end: activeSel.end, ...patch }])
     }
-    updateEl(selected.id, { ranges: next })
+    // One undo step per toolbar action (never coalesced), selection kept.
+    pushUndo()
+    genStreak.current = false
+    const clearEmphasis = patch === 'clear' && tv.emphasis && tv.emphasis.end > activeSel.start && tv.emphasis.start < activeSel.end
+    setEls((list) => list.map((e) => (e.id === selected.id ? { ...e, v: { ...e.v, ranges: next, ...(clearEmphasis ? { emphasis: undefined } : {}) } } : e)))
+  }
+  // Emphasis — the one animated span per layer — moved onto the selection.
+  const applyEmphasis = (treatment: 'none' | 'underline' | 'highlight') => {
+    if (!selected || !tv || !activeSel) return
+    pushUndo()
+    genStreak.current = false
+    const span = treatment === 'none' ? undefined : { ...(tv.emphasis ?? defEmphasis(palette.accent)), treatment, start: activeSel.start, end: activeSel.end }
+    setEls((list) => list.map((e) => (e.id === selected.id ? { ...e, v: { ...e.v, emphasis: span } } : e)))
+  }
+
+  // ── Character mode plumbing ──
+  const enterCharMode = (id: number) => {
+    const el = els.find((x) => x.id === id)
+    if (!el || el.type !== 'text') return
+    if (((el.v as TextV).repeatLines ?? 1) > 1) {
+      flash('Type walls can’t be styled per character')
+      return
+    }
+    setSelectedIds([id])
+    setCharMode(id)
+    setCharSel(null)
+    setCharHover(null)
+    setCharPop(null)
+  }
+  const exitCharMode = () => {
+    setCharMode(null)
+    setCharSel(null)
+    setCharHover(null)
+    setCharPop(null)
+    charAnchor.current = null
+  }
+  // Glyph geometry from the live text node: extents per rendered glyph,
+  // mapped through the node's CTM so rotation and tategaki come out right.
+  // Newlines aren't glyphs — string index ↔ glyph index via the same skip
+  // the renderer's own measurement uses.
+  const measureGlyphs = useCallback(() => {
+    if (charMode === null) return
+    const g = gNodes.current.get(charMode)
+    const svg = svgRef.current
+    const el = els.find((x) => x.id === charMode)
+    if (!g || !svg || !el || el.type !== 'text') return
+    const t = [...g.querySelectorAll('text')].find((n) => !(n.getAttribute('transform') ?? '').includes('translate')) as SVGTextElement | undefined
+    if (!t) return
+    const text = (el.v as TextV).text
+    let total = 0
+    let toView: DOMMatrix
+    let toScreen: DOMMatrix
+    try {
+      total = t.getNumberOfChars()
+      const root = svg.getScreenCTM()
+      const tm = t.getScreenCTM()
+      if (!root || !tm) return
+      toView = root.inverse().multiply(tm)
+      toScreen = tm
+    } catch {
+      return
+    }
+    const pt = svg.createSVGPoint()
+    const out: typeof charGlyphs = []
+    let ri = 0
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] === '\n') continue
+      const k = ri++
+      if (k >= total) break
+      const r = t.getExtentOfChar(k)
+      const corners: [number, number][] = [[r.x, r.y], [r.x + r.width, r.y], [r.x + r.width, r.y + r.height], [r.x, r.y + r.height]]
+      const map = (m: DOMMatrix) => corners.map(([x, y]) => { pt.x = x; pt.y = y; const q = pt.matrixTransform(m); return [q.x, q.y] as [number, number] })
+      const vp = map(toView)
+      const sp = map(toScreen)
+      const xs = sp.map((q) => q[0])
+      const ys = sp.map((q) => q[1])
+      const sx = Math.min(...xs)
+      const sy = Math.min(...ys)
+      out.push({ i, pts: vp.map((q) => `${r2(q[0])},${r2(q[1])}`).join(' '), sx, sy, sw: Math.max(...xs) - sx, sh: Math.max(...ys) - sy })
+    }
+    setCharGlyphs((prev) => (JSON.stringify(prev) === JSON.stringify(out) ? prev : out))
+  }, [charMode, els])
+  useLayoutEffect(() => {
+    if (charMode === null) {
+      setCharGlyphs([])
+      return
+    }
+    const raf = requestAnimationFrame(measureGlyphs)
+    document.fonts?.addEventListener('loadingdone', measureGlyphs)
+    return () => {
+      cancelAnimationFrame(raf)
+      document.fonts?.removeEventListener('loadingdone', measureGlyphs)
+    }
+  }, [charMode, measureGlyphs, canvasRect, zoom])
+  // Leave character mode when its element goes away or the selection moves on.
+  useEffect(() => {
+    if (charMode === null) return
+    if (!els.some((e) => e.id === charMode) || selectedIds.length !== 1 || selectedIds[0] !== charMode) exitCharMode()
+  }, [charMode, els, selectedIds])
+  // Click outside the glyphs / toolbar exits; a glyph drag extends the range.
+  useEffect(() => {
+    if (charMode === null) return
+    const down = (e: PointerEvent) => {
+      const t = e.target as Element | null
+      if (t?.closest('[data-glyph], [data-char-toolbar]')) return
+      exitCharMode()
+    }
+    const move = (e: PointerEvent) => {
+      if (!charDragging.current || charAnchor.current === null) return
+      const g = document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-glyph]')
+      if (!g) return
+      const i = Number(g.getAttribute('data-glyph'))
+      const a = charAnchor.current
+      setCharSel({ start: Math.min(a, i), end: Math.max(a, i) + 1 })
+    }
+    const up = () => {
+      charDragging.current = false
+    }
+    document.addEventListener('pointerdown', down, true)
+    document.addEventListener('pointermove', move)
+    document.addEventListener('pointerup', up)
+    return () => {
+      document.removeEventListener('pointerdown', down, true)
+      document.removeEventListener('pointermove', move)
+      document.removeEventListener('pointerup', up)
+    }
+  }, [charMode])
+  const glyphDown = (e: React.PointerEvent, i: number) => {
+    e.stopPropagation()
+    setCharPop(null)
+    if (e.shiftKey && charAnchor.current !== null) {
+      const a = charAnchor.current
+      setCharSel({ start: Math.min(a, i), end: Math.max(a, i) + 1 })
+      return
+    }
+    charAnchor.current = i
+    charDragging.current = true
+    setCharSel({ start: i, end: i + 1 })
+  }
+  charModeRef.current = {
+    active: charMode !== null,
+    enter: () => {
+      if (selectedIds.length === 1) enterCharMode(selectedIds[0])
+    },
+    exit: exitCharMode,
+    selectAll: () => {
+      if (tv) setCharSel({ start: 0, end: tv.text.length })
+    },
   }
 
   return (
@@ -14542,7 +14703,7 @@ function SumiEditor() {
                 el: e, seed, gRef, reportCap, mReg, aReg, sReg, tsReg, subjectLookup, sSilhouetteReg, staticSilhouetteLookup,
                 // A previewed candidate is look-only: no drag, no inline edit.
                 onDown: inspoPreview ? () => {} : (ev: React.PointerEvent, id: number) => startDrag(ev, id, 'move'),
-                onEdit: inspoPreview ? () => {} : openTextEditor,
+                onEdit: inspoPreview ? () => {} : enterCharMode,
                 belowIds: shownEls.slice(0, i).filter((x) => !x.hidden).map((x) => x.id),
                 bg: shownBg,
                 view,
@@ -14780,6 +14941,32 @@ function SumiEditor() {
               zIndex: 95,
             }}
           >
+            {/* Character mode: one hit target per glyph — faint outline on
+                hover, a tint on the selected run. */}
+            {charMode !== null && (
+              <g style={{ pointerEvents: 'all' }}>
+                {charGlyphs.map((g) => {
+                  const on = !!charSel && g.i >= charSel.start && g.i < charSel.end
+                  return (
+                    <polygon
+                      key={g.i}
+                      data-glyph={g.i}
+                      points={g.pts}
+                      fill={on ? 'var(--color-ink)' : 'transparent'}
+                      fillOpacity={on ? 0.14 : 0}
+                      stroke={charHover === g.i || on ? 'var(--color-ink)' : 'none'}
+                      strokeOpacity={on ? 0.5 : 0.35}
+                      strokeWidth={1}
+                      vectorEffect="non-scaling-stroke"
+                      style={{ cursor: 'text' }}
+                      onPointerEnter={() => setCharHover(g.i)}
+                      onPointerLeave={() => setCharHover((h) => (h === g.i ? null : h))}
+                      onPointerDown={(e) => glyphDown(e, g.i)}
+                    />
+                  )
+                })}
+              </g>
+            )}
             {selBoxes.map((selBox) => (() => {
               // Registration-mark corner ticks (thin-line technical language
               // from the board) + corner handles for direct resize.
@@ -14957,23 +15144,91 @@ function SumiEditor() {
             </button>
           )}
 
-          {/* Inline text editor — floats over the double-clicked text element */}
-          {editing && (() => {
-            const el = els.find((x) => x.id === editing.id)
-            if (!el || el.type !== 'text') return null
-            const v = el.v as TextV
-            return (
-              <textarea
-                autoFocus
-                value={v.text}
-                rows={Math.min(4, Math.max(1, v.text.split('\n').length))}
-                onChange={(e) => updateEl(editing.id, { text: e.target.value })}
-                onBlur={() => setEditing(null)}
-                onKeyDown={(e) => { if (e.key === 'Escape') setEditing(null) }}
-                onFocus={(e) => e.target.select()}
-                className="fixed z-[95] -translate-x-1/2 -translate-y-1/2 resize-none rounded-lg border border-white/20 bg-[#212121] px-3 py-2 text-center font-mono text-sm text-white shadow-2xl outline-none"
-                style={{ left: editing.left, top: editing.top, minWidth: 180 }}
-              />
+          {/* ── Character toolbar — beside the glyph selection, never over it;
+              flips to the left when the right side would leave the artboard. ── */}
+          {charMode !== null && activeSel && tv && canvasRect && (() => {
+            const sel = charGlyphs.filter((g) => g.i >= activeSel.start && g.i < activeSel.end)
+            if (!sel.length) return null
+            const x1 = Math.min(...sel.map((g) => g.sx))
+            const x2 = Math.max(...sel.map((g) => g.sx + g.sw))
+            const y1 = Math.min(...sel.map((g) => g.sy))
+            const y2 = Math.max(...sel.map((g) => g.sy + g.sh))
+            const TB_W = 300
+            const TB_H = 36
+            const gap = 14
+            const flip = x2 + gap + TB_W > canvasRect.left + canvasRect.width
+            const left = flip ? Math.max(8, x1 - gap - TB_W) : x2 + gap
+            const top = Math.max(8, Math.min(window.innerHeight - TB_H - 8, (y1 + y2) / 2 - TB_H / 2))
+            const colorNow = selCommon('color') ?? tv.color
+            const bgNow = selCommon('bg')
+            const emphasisNow = tv.emphasis && tv.emphasis.end > activeSel.start && tv.emphasis.start < activeSel.end ? tv.emphasis.treatment : 'none'
+            const emphasisOk = !tv.vertical && (tv.repeatLines ?? 1) <= 1
+            const tbBtn = 'flex h-7 items-center gap-1.5 rounded-full px-2.5 font-mono text-[11px] text-white/80 transition-colors duration-100 hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-white/50'
+            const dot = (c: string | null) => (
+              <span className="h-3 w-3 shrink-0 rounded-full border border-white/40" style={{ backgroundColor: c ?? 'transparent' }} aria-hidden="true" />
+            )
+            const swatches = (prop: 'color' | 'bg') => (
+              <div className="absolute left-0 top-full mt-1.5 flex items-center gap-1.5 rounded-full border border-white/15 bg-[#212121] px-2.5 py-2 shadow-2xl" role="group" aria-label={prop === 'color' ? 'Glyph colour' : 'Glyph highlight'}>
+                {GUIDE_COLORS.map((c) => (
+                  <button
+                    key={c.hex}
+                    type="button"
+                    aria-label={`${c.name}`}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => applyRange({ [prop]: c.hex })}
+                    className={`h-4 w-4 shrink-0 rounded-full border transition-transform duration-100 hover:scale-110 ${(prop === 'color' ? colorNow : bgNow) === c.hex ? 'border-white ring-1 ring-white/60' : 'border-white/25'}`}
+                    style={{ backgroundColor: c.hex }}
+                  />
+                ))}
+                <label className="ml-1 flex items-center gap-1 font-mono text-[10px] text-white/60" title="Custom">
+                  <input type="color" aria-label="Custom colour" defaultValue={(prop === 'color' ? colorNow : bgNow) ?? '#bc002d'} onChange={(e) => applyRange({ [prop]: e.target.value })} className="h-4 w-5 cursor-pointer rounded border border-white/15 bg-transparent" />
+                  custom
+                </label>
+              </div>
+            )
+            return createPortal(
+              <div
+                data-char-toolbar
+                role="toolbar"
+                aria-label="Character styling"
+                className="fixed z-[96] flex items-center gap-0.5 rounded-full border border-white/15 bg-[#212121] px-1.5 py-1 shadow-2xl"
+                style={{ left, top, width: TB_W, height: TB_H }}
+              >
+                <button type="button" title="Bold" aria-pressed={selAllBold} onMouseDown={(e) => e.preventDefault()} onClick={() => applyRange({ bold: !selAllBold })} className={`${tbBtn} px-2.5 font-bold ${selAllBold ? 'bg-white/15 text-white' : ''}`}>
+                  B
+                </button>
+                <div className="relative">
+                  <button type="button" title="Colour" aria-expanded={charPop === 'color'} onMouseDown={(e) => e.preventDefault()} onClick={() => setCharPop((o) => (o === 'color' ? null : 'color'))} className={tbBtn}>
+                    Colour {dot(colorNow)}
+                  </button>
+                  {charPop === 'color' && swatches('color')}
+                </div>
+                <div className="relative">
+                  <button type="button" title="Highlight" aria-expanded={charPop === 'bg'} onMouseDown={(e) => e.preventDefault()} onClick={() => setCharPop((o) => (o === 'bg' ? null : 'bg'))} className={tbBtn}>
+                    Highlight {dot(bgNow)}
+                  </button>
+                  {charPop === 'bg' && swatches('bg')}
+                </div>
+                <div className="relative">
+                  <button type="button" title={emphasisOk ? 'Emphasis — animated underline or wash' : 'Emphasis draws on horizontal, single-run text only'} aria-expanded={charPop === 'emphasis'} onMouseDown={(e) => e.preventDefault()} onClick={() => setCharPop((o) => (o === 'emphasis' ? null : 'emphasis'))} className={`${tbBtn} ${emphasisOk ? '' : 'opacity-50'}`}>
+                    Emphasis <span aria-hidden="true" className="text-white/50">▾</span>
+                  </button>
+                  {charPop === 'emphasis' && (
+                    <div className="absolute left-0 top-full mt-1.5 flex flex-col rounded-lg border border-white/15 bg-[#212121] p-1 shadow-2xl" role="menu" aria-label="Emphasis">
+                      {([['none', 'None'], ['underline', 'Underline'], ['highlight', 'Wash']] as const).map(([k, label]) => (
+                        <button key={k} type="button" role="menuitemradio" aria-checked={emphasisNow === k} onMouseDown={(e) => e.preventDefault()} onClick={() => { applyEmphasis(k); setCharPop(null) }} className={`rounded px-2.5 py-1 text-left font-mono text-[11px] transition-colors duration-100 hover:bg-white/10 ${emphasisNow === k ? 'text-white' : 'text-white/70'}`}>
+                          {label}
+                        </button>
+                      ))}
+                      {!emphasisOk && <span className="max-w-[180px] px-2.5 pb-1 pt-0.5 text-[10px] leading-4 text-white/40">Stored now; draws once this text is horizontal.</span>}
+                    </div>
+                  )}
+                </div>
+                <button type="button" title="Clear styling" aria-label="Clear styling" onMouseDown={(e) => e.preventDefault()} onClick={() => applyRange('clear')} className={`${tbBtn} ml-auto px-2.5`}>
+                  ✕
+                </button>
+              </div>,
+              rootRef.current ?? document.body,
             )
           })()}
           {/* ── Crop mode toolbar — floating pill, mirrors the on-canvas
@@ -15725,146 +15980,10 @@ function SumiEditor() {
                         placeholder="Type something… (Enter = new line)"
                         rows={Math.min(4, Math.max(1, tv.text.split('\n').length))}
                         onChange={(e) => up({ text: e.target.value })}
-                        onSelect={(e) => {
-                          const t = e.currentTarget
-                          setTextSel(
-                            t.selectionStart != null && t.selectionEnd != null && t.selectionEnd > t.selectionStart
-                              ? { el: selected.id, start: t.selectionStart, end: t.selectionEnd }
-                              : null,
-                          )
-                        }}
                         className={`${FIELD} resize-none leading-4`}
                       />
                     </div>
-                    {/* Selection toolbar — select characters above, then style them */}
-                    <div className="flex items-center gap-1.5 px-1 py-1 pl-[84px]">
-                      <button
-                        type="button"
-                        title="Bold selection"
-                        disabled={!activeSel}
-                        onMouseDown={(e) => e.preventDefault()}
-                        onClick={() => applyRange({ bold: !selAllBold })}
-                        className={`${DBTN} px-2 font-bold ${selAllBold && activeSel ? 'border-white bg-white/10' : ''}`}
-                      >
-                        B
-                      </button>
-                      <span className="font-mono text-[9px] text-white/55">A</span>
-                      <input
-                        type="color"
-                        title="Selection color"
-                        disabled={!activeSel}
-                        defaultValue="#bc002d"
-                        onChange={(e) => applyRange({ color: e.target.value })}
-                        className="h-6 w-7 shrink-0 cursor-pointer rounded border border-white/15 bg-transparent disabled:pointer-events-none disabled:opacity-35"
-                      />
-                      <span className="font-mono text-[9px] text-white/55">bg</span>
-                      <input
-                        type="color"
-                        title="Selection highlight background"
-                        disabled={!activeSel}
-                        defaultValue="#bc002d"
-                        onChange={(e) => applyRange({ bg: e.target.value })}
-                        className="h-6 w-7 shrink-0 cursor-pointer rounded border border-white/15 bg-transparent disabled:pointer-events-none disabled:opacity-35"
-                      />
-                      <button
-                        type="button"
-                        title="Clear selection styling"
-                        disabled={!activeSel}
-                        onMouseDown={(e) => e.preventDefault()}
-                        onClick={() => applyRange('clear')}
-                        className={DBTN}
-                      >
-                        ×
-                      </button>
-                    </div>
-                    {/* Style-guide swatches for the selection — A = text, bg = highlight */}
-                    {(['color', 'bg'] as const).map((prop) => (
-                      <div key={prop} className="flex items-center gap-1 px-1 pb-1 pl-[84px]">
-                        <span className="w-5 shrink-0 font-mono text-[9px] text-white/55">{prop === 'color' ? 'A' : 'bg'}</span>
-                        {GUIDE_COLORS.map((c) => (
-                          <button
-                            key={c.hex}
-                            type="button"
-                            aria-label={`${c.name} → selection ${prop === 'color' ? 'text' : 'highlight'}`}
-                            disabled={!activeSel}
-                            onMouseDown={(e) => e.preventDefault()}
-                            onClick={() => applyRange({ [prop]: c.hex })}
-                            className="h-4 w-4 shrink-0 rounded-full border border-white/25 transition-transform duration-100 hover:scale-110 disabled:pointer-events-none disabled:opacity-35"
-                            style={{ backgroundColor: c.hex }}
-                          />
-                        ))}
-                      </div>
-                    ))}
-                    <p className="px-1 pb-1 pl-[84px] text-[10px] leading-4 text-white/40">
-                      {activeSel
-                        ? `Styling “${tv.text.slice(activeSel.start, activeSel.end)}”`
-                        : 'Select characters in the text field to bold, color, or highlight them.'}
-                    </p>
-                  </Section>
-                  <Section title="Emphasis">
-                    {/* One animated span per layer — a substring that draws
-                        an underline or wash highlight after the layer's own
-                        entrance settles. Separate from the bold/color/bg
-                        ranges above: this is a single motion-carrying mark,
-                        not per-character styling. */}
-                    <div className="px-1 pb-1 pl-[84px]">
-                      <button
-                        type="button"
-                        disabled={!activeSel}
-                        onMouseDown={(e) => e.preventDefault()}
-                        onClick={() =>
-                          activeSel &&
-                          up({
-                            emphasis: tv.emphasis
-                              ? { start: activeSel.start, end: activeSel.end }
-                              : { ...defEmphasis(palette.accent), start: activeSel.start, end: activeSel.end },
-                          })
-                        }
-                        className={`${DBTN} disabled:pointer-events-none disabled:opacity-35`}
-                      >
-                        {tv.emphasis ? 'Move to selection' : 'Mark emphasis'}
-                      </button>
-                      {tv.emphasis && (
-                        <button
-                          type="button"
-                          onClick={() => up({ emphasis: undefined })}
-                          className={`${DBTN} ml-1.5`}
-                        >
-                          Remove
-                        </button>
-                      )}
-                    </div>
-                    <p className="px-1 pb-1 pl-[84px] text-[10px] leading-4 text-white/40">
-                      {tv.emphasis
-                        ? `Marked: “${tv.text.slice(tv.emphasis.start, tv.emphasis.end)}” — select new characters and click "Move to selection" to shift it.`
-                        : 'Select characters above, then mark them for an animated underline or wash highlight.'}
-                    </p>
-                    {tv.emphasis && (
-                      <>
-                        <div className={ROW}>
-                          <span className={ROW_LABEL}>treatment</span>
-                          <div className="flex flex-1 gap-1">
-                            {(['underline', 'highlight'] as const).map((t) => (
-                              <button
-                                key={t}
-                                type="button"
-                                onClick={() => up({ emphasis: { treatment: t } })}
-                                className={`${DBTN} flex-1 capitalize ${tv.emphasis?.treatment === t ? 'border-white bg-white/10' : ''}`}
-                              >
-                                {t}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                        <DColor label="color" value={tv.emphasis.color ?? palette.accent} onChange={(x) => up({ emphasis: { color: x } })} />
-                        <DSlider label="duration" value={tv.emphasis.duration} onChange={(n) => up({ emphasis: { duration: n } })} min={0.2} max={4} step={0.1} unit="s" />
-                        <DSelect label="ease" value={tv.emphasis.easing} options={MOTION_EASES} onChange={(x) => up({ emphasis: { easing: x } })} />
-                        <DSlider label="rest" value={tv.emphasis.rest} onChange={(n) => up({ emphasis: { rest: n } })} min={0} max={5} step={0.1} unit="s" />
-                        <p className="px-1 pt-1 pl-[84px] text-[10px] leading-4 text-white/40">
-                          Draws after this layer&apos;s own entrance settles, plus this rest.
-                        </p>
-                      </>
-                    )}
+                    <p className="px-1 pb-1 pl-[84px] text-[10px] leading-4 text-white/40">Double-click text on canvas to style characters.</p>
                   </Section>
                   <Section title="Type">
                     <DSelect

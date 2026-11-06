@@ -38,6 +38,7 @@ export const SHORTCUTS: Shortcut[] = [
   S('duplicate', 'Core', 'Duplicate', [{ code: 'KeyD', mods: ['mod'] }], { needsSelection: true }),
   S('delete', 'Core', 'Delete', [{ code: 'Backspace', label: '⌫' }, { code: 'Delete', label: 'Del' }], { needsSelection: true }),
   S('selectAll', 'Core', 'Select all', [{ code: 'KeyA', mods: ['mod'] }]),
+  S('styleChars', 'Core', 'Style characters', [{ code: 'Enter', label: '↵' }], { needsSelection: true, hint: 'text' }),
   S('escape', 'Core', 'Deselect · close · cancel', [{ code: 'Escape', label: 'Esc' }]),
   S('nudge', 'Core', 'Nudge 0.5%', [{ code: 'ArrowUp', label: '↑' }, { code: 'ArrowDown', label: '↓' }, { code: 'ArrowLeft', label: '←' }, { code: 'ArrowRight', label: '→' }], { needsSelection: true }),
   S('nudgeBig', 'Core', 'Nudge 5%', [{ code: 'ArrowUp', mods: ['shift'], label: '↑' }, { code: 'ArrowDown', mods: ['shift'], label: '↓' }, { code: 'ArrowLeft', mods: ['shift'], label: '←' }, { code: 'ArrowRight', mods: ['shift'], label: '→' }], { needsSelection: true }),
