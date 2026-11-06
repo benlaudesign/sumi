@@ -41,7 +41,7 @@ export const SHORTCUTS: Shortcut[] = [
   S('escape', 'Core', 'Deselect · close · cancel', [{ code: 'Escape', label: 'Esc' }]),
   S('nudge', 'Core', 'Nudge 0.5%', [{ code: 'ArrowUp', label: '↑' }, { code: 'ArrowDown', label: '↓' }, { code: 'ArrowLeft', label: '←' }, { code: 'ArrowRight', label: '→' }], { needsSelection: true }),
   S('nudgeBig', 'Core', 'Nudge 5%', [{ code: 'ArrowUp', mods: ['shift'], label: '↑' }, { code: 'ArrowDown', mods: ['shift'], label: '↓' }, { code: 'ArrowLeft', mods: ['shift'], label: '←' }, { code: 'ArrowRight', mods: ['shift'], label: '→' }], { needsSelection: true }),
-  S('save', 'Core', 'Save page', [{ code: 'KeyS', mods: ['mod'] }]),
+  S('save', 'Core', 'Save', [{ code: 'KeyS', mods: ['mod'] }], { hint: 'autosaves anyway' }),
   // ── Arrange ──
   S('forward', 'Arrange', 'Bring forward', [{ code: 'BracketRight', mods: ['mod'], label: ']' }], { needsSelection: true }),
   S('backward', 'Arrange', 'Send backward', [{ code: 'BracketLeft', mods: ['mod'], label: '[' }], { needsSelection: true }),
@@ -75,7 +75,6 @@ export const SHORTCUTS: Shortcut[] = [
   S('inspo', 'Sumi', 'Inspo', [{ code: 'KeyR' }], { hint: 'toggle' }),
   S('inspoMore', 'Sumi', 'More Inspo', [{ code: 'KeyM' }], { hint: 'while open' }),
   S('export', 'Sumi', 'Export', [{ code: 'KeyE', mods: ['mod'] }]),
-  S('overview', 'Sumi', 'Pages overview', [{ code: 'KeyO' }], { hint: 'overview layout' }),
   S('cheatSheet', 'Sumi', 'Keyboard shortcuts', [{ code: 'Slash', mods: ['shift'], label: '?' }]),
 ]
 
