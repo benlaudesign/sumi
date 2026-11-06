@@ -17,12 +17,12 @@ import { Kbd } from '../src/components/Kbd'
 import { Tip } from '../src/components/Tip'
 import { DialRoot, useDialKit } from 'dialkit'
 import 'dialkit/styles.css'
-import { INSPO_NAV, INSPO_NAV_VARIANTS, type FilmstripControls, type InspectorBehaviour, type InspoNavVariant, type LightboxLayout } from '../src/config/inspoNav'
+import { INSPO_NAV, INSPO_NAV_VARIANTS, type InspoNavVariant, type LightboxLayout } from '../src/config/inspoNav'
 import { CheatSheet } from '../src/components/CheatSheet'
 import { isMacPlatform, matchShortcut, shortcutChips } from '../src/config/shortcuts'
 import { BUILTIN_FONTS, CURATED_FONTS, fontCssHref, fontLinkId } from '../src/config/fonts'
 import { MIN_EDITOR_WIDTH } from '../src/config/layout'
-import { runInspo, type InspoContext, type InspoEl, type InspoMode, type InspoPage, type InspoResult, type Scored } from '../src/inspo'
+import { runInspo, type InspoContext, type InspoEl, type InspoPage, type InspoResult, type Scored } from '../src/inspo'
 
 // ── Canvas ────────────────────────────────────────────────────────────────
 
@@ -53,7 +53,7 @@ export interface Palette {
 
 // Restrained register — paper / ink / one red. The original board.
 export const PALETTES: Record<string, Palette> = {
-  'Tokens': { paper: '#f4f4f2', ink: '#111111', accent: '#bc002d', alt: '#e13834' },
+  'Ink / vermilion': { paper: '#f4f4f2', ink: '#111111', accent: '#bc002d', alt: '#e13834' },
   'Red / black': { paper: '#f6f3ec', ink: '#141414', accent: '#d93a2b', alt: '#141414' },
   'Indigo': { paper: '#f2efe6', ink: '#1c3461', accent: '#2c4e8f', alt: '#101f3c' },
   'Red / cream': { paper: '#f1e8d7', ink: '#3a2e26', accent: '#c73e2e', alt: '#a8322a' },
@@ -222,6 +222,7 @@ const ROTATE_CURSOR = encodeURIComponent(
 
 const KEYFRAMES = `
 @keyframes pg-fade-out { from { opacity: 1 } to { opacity: 0 } }
+@keyframes pg-rise { from { opacity: 0; transform: translateY(8px) } to { opacity: 1; transform: none } }
 /* Plain arrow everywhere in the playground — buttons, sliders, canvas… */
 [data-pg], [data-pg] * { cursor: default !important; }
 /* …except direct-manipulation affordances, which need their own cursors. */
@@ -2076,7 +2077,7 @@ interface FrameV {
 
 const FRAME_PRESET_NAMES = ['stamp']
 
-function defFrame(p: Palette): FrameV {
+export function defFrame(p: Palette): FrameV {
   return {
     preset: 'stamp',
     perfRadius: 5,
@@ -6940,6 +6941,33 @@ function pageHasMotion(page: PageState): boolean {
 // rasterises this (src/inspo/measure.ts) to read ink coverage.
 let inspoHost: HTMLDivElement | null = null
 let inspoRoot: Root | null = null
+// Stamp-border furniture pieces — exported so the dev contact sheet can rebuild the stamp page.
+export function furnitureEl(slot: string, p: Palette, id: number): El {
+    if (slot === 'numeral') {
+      return {
+        id, type: 'text', frameFurniture: true, frameSlot: slot,
+        v: { ...defText(p), text: '80', font: 'Zen Kaku Gothic New', size: 46, weight: 900, color: p.ink, x: 15, y: 9, vertical: false },
+      }
+    }
+    if (slot === 'label') {
+      return {
+        id, type: 'text', frameFurniture: true, frameSlot: slot,
+        v: { ...defText(p), text: '日本郵便', font: 'Noto Serif JP', size: 26, weight: 600, color: p.ink, x: 90, y: 50, vertical: true },
+      }
+    }
+    if (slot === 'year') {
+      return {
+        id, type: 'text', frameFurniture: true, frameSlot: slot,
+        v: { ...defText(p), text: '2026', font: 'Geist Mono', size: 15, weight: 500, color: p.ink, x: 15, y: 92, vertical: false },
+      }
+    }
+    // seal
+    return {
+      id, type: 'shape', frameFurniture: true, frameSlot: slot,
+      v: { ...defShape(p), shape: 'chrysanthemum', fill: 'outline', color: p.accent, strokeWidth: 1.5, size: 34, x: 90, y: 9, rotation: 0 },
+    }
+  }
+
 export function pageSvgMarkup(page: InspoPage): string {
   if (typeof document === 'undefined') return ''
   if (!inspoHost || !inspoRoot) {
@@ -6966,6 +6994,7 @@ export function pageSvgMarkup(page: InspoPage): string {
 export function makeInspoCtx(palette: Palette, fonts: string[]): InspoContext {
   return {
     palette,
+    palettes: { restrained: PALETTES, expressive: EXPRESSIVE_PALETTES },
     fonts,
     subjectAllowed: FEATURES.subject,
     makeDefault: (type) => DEFAULTS[type](palette) as unknown as Record<string, unknown>,
@@ -8941,7 +8970,7 @@ export default function Sumi() {
 }
 
 function SumiEditor() {
-  const initialPalette = PALETTES['Tokens']
+  const initialPalette = PALETTES['Ink / vermilion']
   // Restored pages, or the starter composition on a first visit. Lazy so
   // localStorage is read exactly once, on the client (the editor never
   // renders on the server — see the desktop gate).
@@ -8959,7 +8988,7 @@ function SumiEditor() {
   const [overprint, setOverprint] = useState(bootPage.overprint ?? false)
   const [frame, setFrame] = useState<FrameV | null>(bootPage.frame ?? null)
   const [texture, setTexture] = useState(bootPage.texture)
-  const [paletteName, setPaletteName] = useState('Tokens')
+  const [paletteName, setPaletteName] = useState('Ink / vermilion')
   const [cappedIds, setCappedIds] = useState<Record<number, boolean>>({})
   const [toast, setToast] = useState('')
   const [customFonts, setCustomFonts] = useState<string[]>([])
@@ -9300,7 +9329,7 @@ function SumiEditor() {
   previewRef.current = preview
   const previewLenRef = useRef(1)
 
-  const palette = ALL_PALETTES[paletteName] ?? PALETTES['Tokens']
+  const palette = ALL_PALETTES[paletteName] ?? PALETTES['Ink / vermilion']
   const undoStack = useRef<Snapshot[]>([])
   const redoStack = useRef<Snapshot[]>([])
   const svgRef = useRef<SVGSVGElement>(null)
@@ -9731,32 +9760,7 @@ function SumiEditor() {
 
   // Frame furniture — ordinary text/shape layers, just tagged so Apply's
   // toggles can find them again and Remove can orphan (not delete) them.
-  const makeFurnitureEl = (slot: string, p: Palette): El => {
-    const id = nextId.current++
-    if (slot === 'numeral') {
-      return {
-        id, type: 'text', frameFurniture: true, frameSlot: slot,
-        v: { ...defText(p), text: '80', font: 'Zen Kaku Gothic New', size: 46, weight: 900, color: p.ink, x: 15, y: 9, vertical: false },
-      }
-    }
-    if (slot === 'label') {
-      return {
-        id, type: 'text', frameFurniture: true, frameSlot: slot,
-        v: { ...defText(p), text: '日本郵便', font: 'Noto Serif JP', size: 26, weight: 600, color: p.ink, x: 90, y: 50, vertical: true },
-      }
-    }
-    if (slot === 'year') {
-      return {
-        id, type: 'text', frameFurniture: true, frameSlot: slot,
-        v: { ...defText(p), text: '2026', font: 'Geist Mono', size: 15, weight: 500, color: p.ink, x: 15, y: 92, vertical: false },
-      }
-    }
-    // seal
-    return {
-      id, type: 'shape', frameFurniture: true, frameSlot: slot,
-      v: { ...defShape(p), shape: 'chrysanthemum', fill: 'outline', color: p.accent, strokeWidth: 1.5, size: 34, x: 90, y: 9, rotation: 0 },
-    }
-  }
+  const makeFurnitureEl = (slot: string, p: Palette): El => furnitureEl(slot, p, nextId.current++)
 
   // Applying a frame does NOT touch existing layers — they simply start
   // clipping to the paper field (see the els.map props below). One frame
@@ -10453,7 +10457,7 @@ function SumiEditor() {
   const applyPalette = (name: string) => {
     pushUndo()
     setPaletteName(name)
-    const p = ALL_PALETTES[name] ?? PALETTES['Tokens']
+    const p = ALL_PALETTES[name] ?? PALETTES['Ink / vermilion']
     setBg(p.paper)
     const cols = [p.accent, p.ink, p.alt]
     // Textures/images keep their own look — re-inking them reads as a bug.
@@ -12646,9 +12650,15 @@ function SumiEditor() {
           nv.cancel()
           return
         }
-        if (e.code === 'KeyR' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+        // N loads more (R stays the Inspo toggle, so it closes the session).
+        if (e.code === 'KeyN' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
           e.preventDefault()
           nv.more()
+          return
+        }
+        if (e.code === 'KeyR' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+          e.preventDefault()
+          nv.cancel()
           return
         }
         // S saves the focused candidate (never "+ Shape" during a session);
@@ -12993,7 +13003,7 @@ function SumiEditor() {
       </>
     )
     const printActive = texture || !!bgGrad?.on || overprint || pressGrain > 0
-    const active = ALL_PALETTES[paletteName] ?? PALETTES['Tokens']
+    const active = ALL_PALETTES[paletteName] ?? PALETTES['Ink / vermilion']
     const swatches = (pp: Palette, cls: string) => (
       <span className={`flex overflow-hidden rounded-[2px] ${cls}`} style={{ gap: 1 }}>
         {[pp.paper, pp.ink, pp.accent, pp.alt].map((c, i) => (
@@ -13082,12 +13092,11 @@ function SumiEditor() {
   // thumbnail is clicked (one undo step, Revert still works). Seeded:
   // same page + seed + mode = same six.
   const [inspoOpen, setInspoOpen] = useState(false)
-  const [inspoMode, setInspoMode] = useState<InspoMode>('subtle')
+  // Seeded for determinism (same page + seed = same batch); the seed is
+  // not a UI control any more — it shows in a dev tooltip and the console.
   const [inspoSeed, setInspoSeed] = useState(() => Math.floor(Math.random() * 90000) + 10000)
-  const [inspoSeedDraft, setInspoSeedDraft] = useState<string | null>(null)
   const [inspoResult, setInspoResult] = useState<InspoResult | null>(null)
   const [inspoBusy, setInspoBusy] = useState(false)
-  const [inspoProgress, setInspoProgress] = useState({ tries: 0, passing: 0 })
   const inspoRunId = useRef(0)
   const inspoCtx = useMemo(() => makeInspoCtx(palette, fontOptions), [palette, fontOptions])
 
@@ -13104,16 +13113,19 @@ function SumiEditor() {
     transitionMs: [INSPO_NAV.transitionMs, 0, 600, 10],
     thumbPx: [INSPO_NAV.thumbPx, 72, 240, 4],
     lightboxLayout: { type: 'select', options: ['grid', 'row'], default: INSPO_NAV.lightboxLayout },
-    // Filmstrip refinements
-    controls: { type: 'select', options: ['inline', 'header'], default: typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('controls') === 'header' ? 'header' : INSPO_NAV.controls },
     thumbGapPx: [INSPO_NAV.thumbGapPx, 0, 32, 1],
-    inspector: { type: 'select', options: ['dim', 'collapse', 'none'], default: INSPO_NAV.inspector },
   })
   const navVariant = nav.variant as InspoNavVariant
   const lightboxLayout = nav.lightboxLayout as LightboxLayout
-  const stripControls = nav.controls as FilmstripControls
-  const inspectorBehaviour = nav.inspector as InspectorBehaviour
   const filmstripOpen = inspoOpen && navVariant === 'filmstrip'
+  // The artboard refits when the strip opens/closes — animated over the
+  // strip's own entrance duration, and only then (zooming stays instant).
+  const [fitAnim, setFitAnim] = useState(false)
+  useEffect(() => {
+    setFitAnim(true)
+    const t = window.setTimeout(() => setFitAnim(false), INSPO_NAV.enterMs + 40)
+    return () => window.clearTimeout(t)
+  }, [filmstripOpen])
   // Filmstrip batches accumulate (More appends); other variants show the latest batch only.
   const [inspoBatches, setInspoBatches] = useState<InspoResult[]>([])
   // Canvas area height, measured — the artboard fits ABOVE the strip.
@@ -13136,32 +13148,26 @@ function SumiEditor() {
   const [previewEls, setPreviewEls] = useState<El[] | null>(null)
   const [fadeFrom, setFadeFrom] = useState<{ key: number; page: PageState } | null>(null)
 
-  const runInspoBatch = async (batchSeed: number, mode: InspoMode, append = false) => {
+  const runInspoBatch = async (batchSeed: number, append = false) => {
     const runId = ++inspoRunId.current
     setInspoBusy(true)
     setInspoResult(null)
     if (!append) setInspoBatches([])
-    setInspoProgress({ tries: 0, passing: 0 })
-    const base: InspoPage = { els: structuredClone(els) as unknown as InspoEl[], bg, w: view.w, h: view.h, seed }
+    // Stamp border = frame, not composition: its inset bounds Ma/grid and
+    // its furniture layers pass through untouched.
+    const base: InspoPage = { els: structuredClone(els) as unknown as InspoEl[], bg, w: view.w, h: view.h, seed, frameInset: frame ? frame.inset : undefined }
     // Off the current React flush before the pipeline's own flushSync renders.
     await new Promise((r) => setTimeout(r, 0))
-    let lastTries = 0
-    let lastPassing = 0
     const res = await runInspo({
       base,
       batchSeed,
-      mode,
       ctx: inspoCtx,
-      onProgress: (tries, passing) => {
-        if (runId !== inspoRunId.current) return
-        if (tries - lastTries >= 6 || passing !== lastPassing) {
-          lastTries = tries
-          lastPassing = passing
-          setInspoProgress({ tries, passing })
-        }
-      },
     })
     if (runId !== inspoRunId.current) return
+    if (process.env.NODE_ENV !== 'production') {
+      const rates = Object.entries(res.rejectionsByRule).map(([k, v]) => `${k} ${Math.round((v / res.tries) * 100)}%`).join(' · ')
+      console.info(`[inspo] seed ${batchSeed}: ${res.passing.length}/${res.tries} passed · shown ${res.shown.map((c) => c.tier[0]).join('')} · rejections: ${rates || 'none'}`)
+    }
     setInspoResult(res)
     setInspoBatches((b) => (append ? [...b, res] : [res]))
     setInspoBusy(false)
@@ -13175,7 +13181,7 @@ function SumiEditor() {
   const openInspo = () => {
     setInspoOpen(true)
     resetNav()
-    void runInspoBatch(inspoSeed, inspoMode)
+    void runInspoBatch(inspoSeed)
   }
   const closeInspo = () => {
     inspoRunId.current++
@@ -13188,25 +13194,29 @@ function SumiEditor() {
     setInspoSeed(next)
     if (navVariant === 'filmstrip') {
       // Append: the strip keeps earlier batches; focus stays where it is.
-      void runInspoBatch(next, inspoMode, true)
+      void runInspoBatch(next, true)
     } else {
       resetNav()
-      void runInspoBatch(next, inspoMode)
+      void runInspoBatch(next)
     }
-  }
-  const setInspoModeAndRun = (m: InspoMode) => {
-    setInspoMode(m)
-    resetNav()
-    void runInspoBatch(inspoSeed, m)
   }
   const applyInspo = (c: Scored) => {
     beginGenerative()
     pushUndo()
     // Elements the generator added carry provisional ids (≥ 1e6) — give
     // them real ones from this page's counter.
-    const next = (structuredClone(c.els) as unknown as El[]).map((e) => (e.id >= 1_000_000 ? { ...e, id: nextId.current++ } : e))
+    const idMap = new Map<number, number>()
+    const next = (structuredClone(c.els) as unknown as El[]).map((e) => {
+      if (e.id < 1_000_000) return e
+      const id = nextId.current++
+      idMap.set(e.id, id)
+      return { ...e, id }
+    })
     setEls(next)
-    setSelectedIds([])
+    if (c.bg !== bg) setBg(c.bg)
+    const domId = c.measurement?.dominantId ?? null
+    const sel = domId === null ? null : idMap.get(domId) ?? domId
+    setSelectedIds(sel !== null && next.some((e) => e.id === sel) ? [sel] : [])
     flash(`Inspo ${c.seed} · ${c.archetype}`)
   }
   const inspoPage = (c: Scored): PageState => ({ els: c.els as unknown as El[], bg: c.bg, texture, seed, w: view.w, h: view.h, bgGrad, pressGrain, overprint, frame })
@@ -14151,58 +14161,11 @@ function SumiEditor() {
               <span className="text-[10px] uppercase tracking-[0.18em] text-muted">Inspo</span>
               <button type="button" className={`${btn} px-1.5`} onClick={closeInspo} title="Close (Esc)" aria-label="Close Inspo">×</button>
             </div>
-            <div className="flex gap-1 rounded-md bg-neutral-100 p-1" role="group" aria-label="How far to stray">
-              {(['subtle', 'bold'] as const).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => setInspoModeAndRun(m)}
-                  aria-pressed={inspoMode === m}
-                  className={`flex-1 rounded px-1.5 py-1 capitalize transition-colors duration-100 ${inspoMode === m ? 'bg-paper text-ink shadow-sm' : 'text-neutral-600 hover:text-ink'}`}
-                >
-                  {m}
-                </button>
-              ))}
-            </div>
-            <label className="flex items-center gap-2 text-neutral-700">
-              seed
-              <input
-                type="text"
-                inputMode="numeric"
-                value={inspoSeedDraft ?? String(inspoSeed)}
-                onChange={(e) => setInspoSeedDraft(e.target.value)}
-                onBlur={() => {
-                  if (inspoSeedDraft !== null) {
-                    const n = Number(inspoSeedDraft)
-                    if (Number.isFinite(n) && inspoSeedDraft.trim() !== '') {
-                      const v = Math.max(0, Math.floor(n)) % 100000
-                      setInspoSeed(v)
-                      void runInspoBatch(v, inspoMode)
-                    }
-                  }
-                  setInspoSeedDraft(null)
-                }}
-                onKeyDown={(e) => {
-                  e.stopPropagation()
-                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-                  if (e.key === 'Escape') {
-                    setInspoSeedDraft(null)
-                    ;(e.target as HTMLInputElement).blur()
-                  }
-                }}
-                className="w-full rounded border border-neutral-300 bg-paper px-1.5 py-0.5 tabular-nums text-ink outline-none focus:border-ink"
-                title="Same page + seed + mode = same six. Edit to reproduce a batch."
-              />
-            </label>
-            <button type="button" className={btn} onClick={inspoMore} disabled={inspoBusy} title="Next batch (seed +1)">
+            <button type="button" className={btn} onClick={inspoMore} disabled={inspoBusy} title={`Next batch (seed ${inspoSeed} → ${(inspoSeed + 1) % 100000})`}>
               More
             </button>
-            <p className="text-[10px] leading-4 text-neutral-700">
-              {inspoBusy
-                ? `generating… ${inspoProgress.tries} tried · ${inspoProgress.passing} pass`
-                : inspoResult
-                  ? `${inspoResult.passing.length} of ${inspoResult.tries} passed`
-                  : ''}
+            <p className="text-[10px] leading-4 text-neutral-700" title={inspoResult ? `seed ${inspoResult.batchSeed} · ${inspoResult.passing.length} of ${inspoResult.tries} passed (dev)` : undefined}>
+              {inspoBusy ? 'generating…' : ''}
             </p>
           </div>
           <div className="flex min-w-0 flex-1 gap-3 overflow-x-auto">
@@ -14230,10 +14193,7 @@ function SumiEditor() {
                 <div key={`ph${i}`} className="shrink-0 animate-pulse rounded border border-dashed border-neutral-400 bg-neutral-200/60" style={{ width: 128, aspectRatio: `${view.w} / ${view.h}` }} />
               ))}
             {!inspoBusy && inspoResult && inspoResult.shown.length === 0 && (
-              <p className="self-center font-mono text-[11px] text-neutral-700">Nothing passed the rules for this page — try Bold, or another seed.</p>
-            )}
-            {!inspoBusy && inspoResult && inspoResult.shown.length > 0 && inspoResult.shown.length < 6 && (
-              <p className="self-center font-mono text-[10px] text-neutral-700">Only {inspoResult.shown.length} passed in {inspoResult.tries} tries.</p>
+              <p className="self-center font-mono text-[11px] text-neutral-700">Nothing passed the rules for this page — press More.</p>
             )}
           </div>
         </section>
@@ -14611,6 +14571,7 @@ function SumiEditor() {
               width: filmstripOpen && canvasAreaH > 0
                 ? `calc(min(100%, ${Math.max(120, canvasAreaH - 48)}px * ${r2(view.w / view.h)}) * ${zoom})`
                 : `calc(min(100%, (100vh - 110px) * ${r2(view.w / view.h)}) * ${zoom})`,
+              transition: fitAnim ? `width ${INSPO_NAV.enterMs}ms ease` : undefined,
             }}
           >
           <svg
@@ -15115,53 +15076,26 @@ function SumiEditor() {
               pinned left, batches append with a seed label between them. */}
           {filmstripOpen && (() => {
             const controls = (
-              <div className="flex shrink-0 items-center gap-1.5 font-mono text-[10.5px]" role="group" aria-label="Inspo controls">
-                <div className="flex gap-0.5 rounded-full bg-neutral-100 p-0.5" role="group" aria-label="How far to stray">
-                  {(['subtle', 'bold'] as const).map((m) => (
-                    <button key={m} type="button" onClick={() => setInspoModeAndRun(m)} aria-pressed={inspoMode === m} className={`rounded-full px-2 py-0.5 capitalize ${inspoMode === m ? 'bg-paper text-ink shadow-sm' : 'text-neutral-600 hover:text-ink'}`}>
-                      {m}
-                    </button>
-                  ))}
+              <div className="flex shrink-0 flex-col justify-between gap-2 self-stretch pr-3" style={{ borderRight: '1px solid var(--color-neutral-300)' }} role="group" aria-label="Inspo controls">
+                <div className="flex items-center gap-1.5">
+                  <button type="button" className={`${btn} py-0.5`} onClick={inspoMore} disabled={inspoBusy} title={`Next batch (seed ${inspoSeed} → ${(inspoSeed + 1) % 100000})`}>
+                    More<Kbd>n</Kbd>
+                  </button>
+                  <button type="button" className={`${btn} px-1.5 py-0.5`} onClick={navCancel} aria-label="Close Inspo (Esc)">×</button>
                 </div>
-                <label className="flex items-center gap-1 text-neutral-700" title={inspoResult ? `${inspoResult.passing.length} of ${inspoResult.tries} passed (dev)` : undefined}>
-                  seed
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    value={inspoSeedDraft ?? String(inspoSeed)}
-                    onChange={(e) => setInspoSeedDraft(e.target.value)}
-                    onBlur={() => {
-                      if (inspoSeedDraft !== null) {
-                        const n = Number(inspoSeedDraft)
-                        if (Number.isFinite(n) && inspoSeedDraft.trim() !== '') {
-                          const v = Math.max(0, Math.floor(n)) % 100000
-                          setInspoSeed(v)
-                          resetNav()
-                          void runInspoBatch(v, inspoMode)
-                        }
-                      }
-                      setInspoSeedDraft(null)
-                    }}
-                    onKeyDown={(e) => {
-                      e.stopPropagation()
-                      if (e.key === 'Enter' || e.key === 'Escape') (e.target as HTMLInputElement).blur()
-                    }}
-                    className="w-14 rounded border border-neutral-300 bg-paper px-1.5 py-0.5 tabular-nums text-ink outline-none focus:border-ink"
-                  />
-                </label>
-                <button type="button" className={`${btn} py-0.5`} onClick={inspoMore} disabled={inspoBusy}>
-                  More<Kbd>r</Kbd>
-                </button>
-                <button type="button" className={`${btn} px-1.5 py-0.5`} onClick={navCancel} aria-label="Close Inspo (Esc)">×</button>
+                <span
+                  className="font-mono text-[10px] tabular-nums text-neutral-700"
+                  aria-live="polite"
+                  title={inspoResult ? `seed ${inspoResult.batchSeed} · ${inspoResult.passing.length} of ${inspoResult.tries} passed (dev)` : undefined}
+                >
+                  {navIdx} / {navCount}
+                </span>
               </div>
             )
-            const indicator = (
-              <span className="shrink-0 font-mono text-[10px] tabular-nums text-neutral-700" aria-live="polite">
-                {navIdx} / {navCount}
-                {inspoBusy ? ' · generating…' : ''}
-              </span>
-            )
-            const thumbH = Math.round((nav.thumbPx * view.h) / view.w)
+            // Thumbs are sized by HEIGHT so portrait and landscape frames both
+            // fit the strip; width follows the artboard's ratio.
+            const thumbH = Math.round((nav.thumbPx * 4) / 3)
+            const thumbW = Math.round((thumbH * view.w) / view.h)
             const thumb = (c: Scored | null, i: number, muted = false) => (
               <button
                 key={c ? c.seed : 'original'}
@@ -15175,13 +15109,14 @@ function SumiEditor() {
                 }}
                 onFocus={() => navShow(i)}
                 onClick={() => navKeep(i)}
-                title={c ? `${c.seed} · score ${Math.round(c.score * 100)} (dev)` : 'The page as it is'}
+                title={c ? `${c.tier} · ${c.dims.join(' + ')} · ${c.seed} · score ${Math.round(c.score * 100)} (dev)` : 'The page as it is'}
                 aria-label={c ? `Keep ${c.archetype} (${c.seed})` : 'Keep the original'}
+                data-tier={c?.tier}
                 className={`group/th flex shrink-0 flex-col items-start gap-1 rounded-sm text-left transition-transform duration-150 focus:outline-none ${i === navIdx ? '-translate-y-px' : ''} ${muted ? 'opacity-70' : ''}`}
               >
                 <div
                   className={`overflow-hidden rounded-sm bg-paper ${i === navIdx ? 'shadow-md ring-[1.5px] ring-ink' : 'ring-1 ring-neutral-300 group-hover/th:ring-neutral-500'}`}
-                  style={{ width: nav.thumbPx, height: thumbH }}
+                  style={{ width: thumbW, height: thumbH }}
                 >
                   <PreviewCanvas page={c ? inspoPage(c) : currentPage()} ns={`-fs${i}`} />
                 </div>
@@ -15200,17 +15135,15 @@ function SumiEditor() {
                 )
               b.shown.forEach((c, j) => thumbs.push(thumb(c, batchStartIdx(bi) + j)))
             })
+            const skeletons = inspoBusy
+              ? Array.from({ length: 6 }).map((_, i) => <div key={`sk${i}`} className="shrink-0 animate-pulse rounded-sm bg-neutral-200" style={{ width: thumbW, height: thumbH }} />)
+              : []
             return (
-              <div className="shrink-0 border-t border-neutral-300 bg-paper" aria-label="Inspo filmstrip">
-                {stripControls === 'header' && (
-                  <div className="flex items-center justify-between gap-3 border-b border-neutral-200 px-3 py-1.5">
-                    {controls}
-                    {indicator}
-                  </div>
-                )}
+              <div className="flex shrink-0 justify-center px-4 pb-4" aria-label="Inspo filmstrip">
+                {/* Floating card: hugs its content, scrolls inside, never wider than the canvas minus 32px. */}
                 <div
-                  className="flex items-stretch overflow-x-auto px-3 py-2.5"
-                  style={{ gap: nav.thumbGapPx }}
+                  className="flex max-w-full items-stretch overflow-x-auto rounded-lg border border-neutral-300 bg-paper px-3 py-2.5 shadow-[0_12px_40px_rgba(0,0,0,0.14)]"
+                  style={{ gap: nav.thumbGapPx, animation: `pg-rise ${INSPO_NAV.enterMs}ms ease-out both` }}
                   onPointerLeave={() => {
                     if (hoverTimer.current) clearTimeout(hoverTimer.current)
                     navShow(navIdx)
@@ -15218,17 +15151,12 @@ function SumiEditor() {
                 >
                   {/* Pinned: stays put while the batches scroll underneath. */}
                   <div className="sticky left-0 z-10 flex shrink-0 items-stretch bg-paper pr-1" style={{ gap: nav.thumbGapPx, marginLeft: -12, paddingLeft: 12 }}>
-                    {stripControls === 'inline' && (
-                      <div className="flex shrink-0 flex-col justify-between gap-2 self-stretch pr-3" style={{ borderRight: '1px solid var(--color-neutral-300)' }}>
-                        {controls}
-                        {indicator}
-                      </div>
-                    )}
+                    {controls}
                     {thumb(null, 0, true)}
                     <div className="w-px shrink-0 self-stretch bg-neutral-300" aria-hidden="true" />
                   </div>
                   {thumbs}
-                  {inspoBusy && <div className="shrink-0 animate-pulse rounded-sm border border-dashed border-neutral-400" style={{ width: nav.thumbPx, height: thumbH }} />}
+                  {skeletons}
                 </div>
               </div>
             )
@@ -15485,10 +15413,12 @@ function SumiEditor() {
         </div>
 
         {/* ── Inspector (DialKit controls inline) ── */}
-        {!uiHidden && !(filmstripOpen && inspectorBehaviour === 'collapse') && (
+        {!uiHidden && (
         <div
-          inert={filmstripOpen && inspectorBehaviour === 'dim'}
-          className={`w-80 shrink-0 overflow-hidden transition-opacity duration-200 ${filmstripOpen && inspectorBehaviour === 'dim' ? 'pointer-events-none opacity-40' : ''}`}
+          inert={filmstripOpen}
+          aria-hidden={filmstripOpen}
+          className="shrink-0 overflow-hidden"
+          style={{ width: filmstripOpen ? 0 : 320, transition: `width ${INSPO_NAV.enterMs}ms ease` }}
         >
         <aside data-inspector="dark" className="h-full w-80 shrink-0 overflow-y-auto bg-[#212121] p-3">
           {selectedIds.length > 1 ? (
@@ -16450,43 +16380,9 @@ function SumiEditor() {
       {/* Floating Inspo control — Subtle/Bold, seed, More — shared by every non-tray variant. */}
       {inspoOpen && navVariant !== 'tray' && navVariant !== 'filmstrip' && (
         <div className="fixed left-1/2 top-[50px] z-[126] flex -translate-x-1/2 items-center gap-2 rounded-full border border-neutral-300 bg-paper px-2 py-1 font-mono text-[10.5px] shadow-xl" role="group" aria-label="Inspo controls">
-          <div className="flex gap-0.5 rounded-full bg-neutral-100 p-0.5" role="group" aria-label="How far to stray">
-            {(['subtle', 'bold'] as const).map((m) => (
-              <button key={m} type="button" onClick={() => setInspoModeAndRun(m)} aria-pressed={inspoMode === m} className={`rounded-full px-2 py-0.5 capitalize ${inspoMode === m ? 'bg-paper text-ink shadow-sm' : 'text-neutral-600 hover:text-ink'}`}>
-                {m}
-              </button>
-            ))}
-          </div>
-          <label className="flex items-center gap-1 text-neutral-700">
-            seed
-            <input
-              type="text"
-              inputMode="numeric"
-              value={inspoSeedDraft ?? String(inspoSeed)}
-              onChange={(e) => setInspoSeedDraft(e.target.value)}
-              onBlur={() => {
-                if (inspoSeedDraft !== null) {
-                  const n = Number(inspoSeedDraft)
-                  if (Number.isFinite(n) && inspoSeedDraft.trim() !== '') {
-                    const v = Math.max(0, Math.floor(n)) % 100000
-                    setInspoSeed(v)
-                    resetNav()
-                    void runInspoBatch(v, inspoMode)
-                  }
-                }
-                setInspoSeedDraft(null)
-              }}
-              onKeyDown={(e) => {
-                e.stopPropagation()
-                if (e.key === 'Enter' || e.key === 'Escape') (e.target as HTMLInputElement).blur()
-              }}
-              className="w-14 rounded border border-neutral-300 bg-paper px-1.5 py-0.5 tabular-nums text-ink outline-none focus:border-ink"
-            />
-          </label>
-          <button type="button" className={`${btn} py-0.5`} onClick={inspoMore} disabled={inspoBusy}>
-            More<Kbd>r</Kbd>
+          <button type="button" className={`${btn} py-0.5`} onClick={inspoMore} disabled={inspoBusy} title={inspoResult ? `seed ${inspoResult.batchSeed} · ${inspoResult.passing.length}/${inspoResult.tries} (dev)` : undefined}>
+            More<Kbd>n</Kbd>
           </button>
-          <span className="text-[10px] text-neutral-700">{inspoBusy ? `${inspoProgress.tries} tried · ${inspoProgress.passing} pass` : inspoResult ? `${inspoResult.passing.length}/${inspoResult.tries}` : ''}</span>
           <button type="button" className={`${btn} px-1.5 py-0.5`} onClick={navCancel} aria-label="Close Inspo">×</button>
         </div>
       )}

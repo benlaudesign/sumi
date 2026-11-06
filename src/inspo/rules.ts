@@ -9,7 +9,9 @@
 // (see measure.ts) — not bounding boxes, which overcount rings, dot
 // patterns and text.
 
-export type InspoMode = 'subtle' | 'bold'
+export type Tier = 'close' | 'mid' | 'far'
+export type Dimension = 'composition' | 'palette' | 'shape' | 'type' | 'subtraction'
+export const DIMENSIONS: Dimension[] = ['composition', 'palette', 'shape', 'type', 'subtraction']
 
 export const RULES = {
   // Offscreen alpha render used for coverage / area / centre of mass.
@@ -70,32 +72,50 @@ export const RULES = {
     minScaleFactor: 1.12,
   },
 
-  // How far each mode may stray from the signature. Thresholds above never
-  // change with mode — only these budgets do.
-  stray: {
-    subtle: {
-      shiftPct: 15, // max position move per element
-      scaleMin: 0.6,
-      scaleMax: 1.6,
-      inkChance: 0.25, // probability an element's ink treatment changes
-      inkMoves: ['outline', 'solid', 'color'] as const,
-      addMax: 1,
-      removeMax: 1,
-      flipOrientation: 0, // chance a horizontal text turns tategaki
-      archetypes: ['thirds', 'golden', 'column', 'hinomaru', 'echo'] as const,
-    },
-    bold: {
-      shiftPct: 40,
-      scaleMin: 0.35,
-      scaleMax: 3.0,
-      inkChance: 0.55,
-      inkMoves: ['outline', 'solid', 'color', 'dots', 'lines', 'blur', 'misreg', 'grain'] as const,
-      addMax: 2,
-      removeMax: 2,
-      flipOrientation: 0.4,
-      archetypes: ['thirds', 'golden', 'column', 'hinomaru', 'echo', 'horizon', 'bleed', 'corner'] as const,
-    },
+  // Tiers replace Subtle/Bold. Every batch spans close → far: a close
+  // candidate changes exactly one dimension (composition), mid exactly
+  // two, far at least three. The five dimensions: composition, palette,
+  // shape, type, subtraction.
+  tiers: {
+    perBatch: { close: 2, mid: 2, far: 2 },
+    // Measured pixel difference vs the original (XOR of ink ÷ union of
+    // ink, inside the frame area). Hard minimum for far; soft otherwise.
+    minDifference: { close: 0.12, mid: 0.3, far: 0.55 },
+    // Probability a mid/far candidate reaches for subtraction (the most
+    // Japanese move — used often).
+    subtractionChance: { mid: 0.45, far: 0.7 },
+    // Far may reach for every dimension once the batch runs short.
+    widenAfterTries: 120,
   },
+
+  // Move budgets (no longer per mode): how far composition may push.
+  stray: {
+    shiftPct: 40,
+    scaleMin: 0.35,
+    scaleMax: 3.0,
+    inkChance: 0.5,
+    inkMoves: ['outline', 'solid', 'color', 'dots', 'lines', 'blur', 'misreg', 'grain'] as const,
+    archetypes: ['thirds', 'golden', 'column', 'hinomaru', 'echo', 'horizon', 'bleed', 'corner'] as const,
+  },
+
+  // Shape vocabulary: swaps stay inside a family.
+  relatedShapes: {
+    circle: ['semicircle', 'ring', 'quarter', 'blob', 'enso'],
+    semicircle: ['circle', 'quarter', 'ring'],
+    ring: ['circle', 'enso', 'rings'],
+    rings: ['ring', 'circle'],
+    enso: ['ring', 'circle'],
+    quarter: ['semicircle', 'circle', 'square'],
+    square: ['bar', 'quarter', 'diamond'],
+    bar: ['square', 'cross'],
+    diamond: ['square', 'triangle'],
+    triangle: ['diamond', 'quarter'],
+    cross: ['bar', 'square'],
+    burst: ['chrysanthemum', 'blossom', 'circle'],
+    blossom: ['chrysanthemum', 'burst'],
+    chrysanthemum: ['blossom', 'burst'],
+    blob: ['circle', 'enso'],
+  } as Record<string, string[]>,
 
   // Size envelopes for generated geometry (px on the 900×1200 reference
   // artboard; scaled by the actual artboard's shorter side ÷ 900).
@@ -112,6 +132,7 @@ export const RULES = {
 
   // Scoring weights for the soft component of every rule (0–1 each).
   weights: {
+    difference: 1.5,
     ma: 2,
     focal: 1,
     balance: 1.5,
@@ -134,6 +155,7 @@ export const RULES = {
   generation: {
     firstBatch: 36,
     maxTries: 200,
+    maxTriesWidened: 400, // after widening the move set — never an empty strip
     show: 6,
   },
 } as const

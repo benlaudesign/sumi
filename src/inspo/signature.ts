@@ -1,5 +1,6 @@
 // Read the page's aesthetic signature: palette, shape vocabulary, text and
 // script, ink treatment, density and composition. Pure, given a Measurement.
+// Frame furniture and textures are frame, not composition — excluded.
 
 import { luminance, normHex, saturation } from './color'
 import type { InspoContext, InspoEl, Measurement, Script, Signature } from './types'
@@ -24,7 +25,7 @@ export function elColor(el: InspoEl): string | null {
 }
 
 export const liveEls = (els: InspoEl[]) => els.filter((e) => !e.hidden)
-export const designEls = (els: InspoEl[]) => liveEls(els).filter((e) => e.type !== 'texture')
+export const designEls = (els: InspoEl[]) => liveEls(els).filter((e) => e.type !== 'texture' && !e.frameFurniture)
 
 export function extractSignature(els: InspoEl[], bg: string, m: Measurement, ctx: InspoContext): Signature {
   const live = designEls(els)
@@ -46,7 +47,6 @@ export function extractSignature(els: InspoEl[], bg: string, m: Measurement, ctx
   const texts = live.filter((e) => e.type === 'text')
   const dom = m.dominantId !== null ? live.find((e) => e.id === m.dominantId) ?? null : null
 
-  // Symmetry: how evenly ink splits across each centre axis (1 = even).
   const left = m.els.filter((e) => e.cx < 50).reduce((a, e) => a + e.area, 0)
   const right = m.els.filter((e) => e.cx >= 50).reduce((a, e) => a + e.area, 0)
   const top = m.els.filter((e) => e.cy < 50).reduce((a, e) => a + e.area, 0)

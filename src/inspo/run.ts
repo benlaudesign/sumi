@@ -1,9 +1,11 @@
-// Orchestrator: measure the page, read its signature, generate candidates
-// until enough pass (never relaxing a rule), pick a diverse shown set.
+// Orchestrator: measure the page, read its signature, generate tiered
+// candidates until each tier's quota is met (never relaxing a rule),
+// widen the move set if the batch runs short, never return an empty
+// strip when anything at all passed. Shown set is ordered close → far.
 
 import { generateCandidate } from './generate'
-import { measurePage } from './measure'
-import { RULES, type InspoMode } from './rules'
+import { frameArea, measurePage } from './measure'
+import { RULES, type Tier } from './rules'
 import { analyticRules, finalize, measuredRules } from './score'
 import { extractSignature } from './signature'
 import type { InspoContext, InspoPage, InspoResult, Scored } from './types'
@@ -11,15 +13,12 @@ import type { InspoContext, InspoPage, InspoResult, Scored } from './types'
 export interface RunOptions {
   base: InspoPage
   batchSeed: number
-  mode: InspoMode
   ctx: InspoContext
   onProgress?: (done: number, passing: number) => void
   maxTries?: number
   show?: number
 }
 
-// Near-duplicate test between two candidates (same count, every shared
-// element within a few % and same fill) — used for diversity, not rules.
 function similar(a: Scored, b: Scored): boolean {
   if (a.els.length !== b.els.length) return false
   for (const e of a.els) {
@@ -28,7 +27,7 @@ function similar(a: Scored, b: Scored): boolean {
     if (Math.hypot(Number(e.v.x) - Number(f.v.x), Number(e.v.y) - Number(f.v.y)) > 3) return false
     if (e.v.fill !== f.v.fill || e.v.color !== f.v.color) return false
   }
-  return true
+  return a.bg === b.bg
 }
 
 export function pickDiverse(passing: Scored[], n: number): Scored[] {
@@ -53,26 +52,39 @@ export function pickDiverse(passing: Scored[], n: number): Scored[] {
   return out
 }
 
+const TIERS: Tier[] = ['close', 'mid', 'far']
+
 export async function runInspo(o: RunOptions): Promise<InspoResult> {
-  const { base, batchSeed, mode, ctx } = o
+  const { base, batchSeed, ctx } = o
   const maxTries = o.maxTries ?? RULES.generation.maxTries
   const show = o.show ?? RULES.generation.show
+  const quota = RULES.tiers.perBatch
+  const area = frameArea(base)
   const baseM = await measurePage(base.els, base, ctx)
   const signature = extractSignature(base.els, base.bg, baseM, ctx)
   const passing: Scored[] = []
   const rejected: Scored[] = []
   const rejectionsByRule: Record<string, number> = {}
+  const have = (t: Tier) => passing.filter((c) => c.tier === t).length
+  const short = () => TIERS.filter((t) => have(t) < quota[t])
   let tries = 0
-  for (let i = 0; i < maxTries; i++) {
-    if (i >= RULES.generation.firstBatch && passing.length >= show) break
+  const hardCap = RULES.generation.maxTriesWidened
+  for (let i = 0; i < hardCap; i++) {
+    const widen = i >= RULES.tiers.widenAfterTries
+    // Past the normal budget only keep going while the strip would be short.
+    if (i >= maxTries && passing.length >= show) break
+    if (i >= RULES.generation.firstBatch && short().length === 0) break
+    // Round-robin over the tiers still short; everything short → far moves.
+    const open = short()
+    const tier: Tier = open.length ? open[i % open.length] : TIERS[i % 3]
     tries++
-    const cand = generateCandidate(base, signature, baseM, batchSeed, i, mode, ctx)
-    const a = analyticRules(cand, base, signature)
+    const cand = generateCandidate(base, signature, baseM, batchSeed, i, { tier, widen: widen && tier === 'far' }, ctx)
+    const a = analyticRules(cand, base, signature, baseM)
     let scored: Scored
     if (a.some((r) => r.hard && !r.pass)) scored = finalize(cand, a, null)
     else {
       const m = await measurePage(cand.els, base, ctx)
-      scored = finalize(cand, [...a, ...measuredRules(cand, signature, m)], m)
+      scored = finalize(cand, [...a, ...measuredRules(cand, signature, m, baseM, area)], m)
     }
     if (scored.pass) passing.push(scored)
     else {
@@ -81,5 +93,13 @@ export async function runInspo(o: RunOptions): Promise<InspoResult> {
     }
     o.onProgress?.(tries, passing.length)
   }
-  return { batchSeed, mode, shown: pickDiverse(passing, show), passing, rejected, tries, rejectionsByRule, signature }
+  // Fill each tier's quota, then top up from neighbouring tiers, ordered close → far.
+  const byTier: Record<Tier, Scored[]> = { close: [], mid: [], far: [] }
+  for (const t of TIERS) byTier[t] = pickDiverse(passing.filter((c) => c.tier === t), quota[t])
+  let shown = [...byTier.close, ...byTier.mid, ...byTier.far]
+  if (shown.length < show) {
+    const rest = pickDiverse(passing.filter((c) => !shown.includes(c)), show - shown.length)
+    shown = [...shown, ...rest].sort((x, y) => TIERS.indexOf(x.tier) - TIERS.indexOf(y.tier))
+  }
+  return { batchSeed, shown, passing, rejected, tries, rejectionsByRule, signature }
 }

@@ -23,6 +23,17 @@ export interface InspoPage {
   w: number
   h: number
   seed: number
+  // Stamp border inset (px) — Ma and the grid are judged inside it, and
+  // frame furniture (frameFurniture els) is frame, not composition.
+  frameInset?: number
+}
+
+// The area of the artboard that counts, in % (whole artboard by default).
+export interface Area {
+  x0: number
+  y0: number
+  x1: number
+  y1: number
 }
 
 export interface Palette {
@@ -35,6 +46,8 @@ export interface Palette {
 // What the editor hands the pipeline so it never imports the editor.
 export interface InspoContext {
   palette: Palette
+  // Curated palettes the palette dimension may reach for.
+  palettes: { restrained: Record<string, Palette>; expressive: Record<string, Palette> }
   fonts: string[]
   subjectAllowed: boolean
   makeDefault: (type: InspoElType) => ElValues
@@ -61,10 +74,13 @@ export interface ElMeasure {
 }
 
 export interface Measurement {
-  els: ElMeasure[] // non-texture, visible elements
-  coverage: number // union ink ÷ artboard, 0–1
+  els: ElMeasure[] // design elements only (no textures, no frame furniture)
+  coverage: number // union ink ÷ frame area, 0–1
   com: { x: number; y: number } // ink centre of mass, %
   dominantId: number | null
+  union: Uint8Array // union ink mask (w × h), for the difference score
+  w: number
+  h: number
 }
 
 // ── Signature (see signature.ts) ──
@@ -90,8 +106,11 @@ export interface Candidate {
   seed: string // "batch·try"
   tryIndex: number
   archetype: string
+  tier: 'close' | 'mid' | 'far'
+  dims: string[] // dimensions changed
   els: InspoEl[]
   bg: string
+  paletteName?: string // when the palette dimension picked a curated palette
 }
 
 export interface RuleResult {
@@ -112,8 +131,7 @@ export interface Scored extends Candidate {
 
 export interface InspoResult {
   batchSeed: number
-  mode: 'subtle' | 'bold'
-  shown: Scored[]
+  shown: Scored[] // ordered close → far
   passing: Scored[]
   rejected: Scored[]
   tries: number

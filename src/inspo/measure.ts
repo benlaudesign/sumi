@@ -5,10 +5,12 @@
 // Each element is rasterised ALONE on a transparent artboard at
 // RULES.measure.widthPx wide, cached by its type + values + artboard size,
 // so a candidate that keeps an element unchanged costs nothing to
-// re-measure. Textures (tonal overlays) are never measured.
+// re-measure. Textures (tonal overlays) and frame furniture (the stamp
+// border's numeral/label/year/seal) are never measured: they're frame,
+// not composition. Coverage is judged inside the frame area.
 
 import { RULES } from './rules'
-import type { ElMeasure, InspoContext, InspoEl, InspoPage, Mask, Measurement } from './types'
+import type { Area, ElMeasure, InspoContext, InspoEl, InspoPage, Mask, Measurement } from './types'
 
 const maskCache = new Map<string, Promise<Mask>>()
 const CACHE_CAP = 3000
@@ -16,6 +18,13 @@ const CACHE_CAP = 3000
 function maskDims(w: number, h: number) {
   const mw = RULES.measure.widthPx
   return { mw, mh: Math.max(1, Math.round((mw * h) / w)) }
+}
+
+// Frame area in %, from the stamp inset (px) if any.
+export function frameArea(page: Pick<InspoPage, 'w' | 'h' | 'frameInset'>): Area {
+  const i = page.frameInset ?? 0
+  if (i <= 0) return { x0: 0, y0: 0, x1: 100, y1: 100 }
+  return { x0: (i / page.w) * 100, y0: (i / page.h) * 100, x1: 100 - (i / page.w) * 100, y1: 100 - (i / page.h) * 100 }
 }
 
 async function rasterMask(markup: string, mw: number, mh: number): Promise<Mask> {
@@ -93,10 +102,11 @@ function maskStats(m: Mask): { cx: number; cy: number; bbox: ElMeasure['bbox'] }
   }
 }
 
-export const isMeasured = (el: InspoEl) => !el.hidden && el.type !== 'texture'
+// Design elements: visible, not a texture, not frame furniture.
+export const isDesignEl = (el: InspoEl) => !el.hidden && el.type !== 'texture' && !el.frameFurniture
 
-export async function measurePage(els: InspoEl[], page: Pick<InspoPage, 'w' | 'h' | 'seed'>, ctx: InspoContext): Promise<Measurement> {
-  const targets = els.filter(isMeasured)
+export async function measurePage(els: InspoEl[], page: Pick<InspoPage, 'w' | 'h' | 'seed' | 'frameInset'>, ctx: InspoContext): Promise<Measurement> {
+  const targets = els.filter(isDesignEl)
   const masks = await Promise.all(targets.map((el) => measureElement(el, page, ctx)))
   const { mw, mh } = maskDims(page.w, page.h)
   const total = mw * mh
@@ -108,8 +118,23 @@ export async function measurePage(els: InspoEl[], page: Pick<InspoPage, 'w' | 'h
     const st = maskStats(m)
     out.push({ id: el.id, type: el.type, area: m.area / total, cx: st.cx, cy: st.cy, bbox: st.bbox })
   })
-  const u: Mask = { w: mw, h: mh, data: union, area: union.reduce((a, b) => a + b, 0) }
-  const us = maskStats(u)
+  // Coverage inside the frame area only.
+  const a = frameArea(page)
+  const ax0 = Math.floor((a.x0 / 100) * mw)
+  const ax1 = Math.ceil((a.x1 / 100) * mw)
+  const ay0 = Math.floor((a.y0 / 100) * mh)
+  const ay1 = Math.ceil((a.y1 / 100) * mh)
+  let inkInside = 0
+  let sx = 0
+  let sy = 0
+  for (let y = ay0; y < ay1; y++)
+    for (let x = ax0; x < ax1; x++)
+      if (union[y * mw + x]) {
+        inkInside++
+        sx += x + 0.5
+        sy += y + 0.5
+      }
+  const areaPx = Math.max(1, (ax1 - ax0) * (ay1 - ay0))
   let dominantId: number | null = null
   let best = 0
   for (const e of out) {
@@ -118,5 +143,27 @@ export async function measurePage(els: InspoEl[], page: Pick<InspoPage, 'w' | 'h
       dominantId = e.id
     }
   }
-  return { els: out, coverage: u.area / total, com: { x: us.cx, y: us.cy }, dominantId }
+  return {
+    els: out,
+    coverage: inkInside / areaPx,
+    com: inkInside ? { x: (sx / inkInside / mw) * 100, y: (sy / inkInside / mh) * 100 } : { x: 50, y: 50 },
+    dominantId,
+    union,
+    w: mw,
+    h: mh,
+  }
+}
+
+// Pixel difference between two measurements: XOR of ink ÷ union of ink.
+export function maskDifference(a: Measurement, b: Measurement): number {
+  if (a.w !== b.w || a.h !== b.h) return 1
+  let xor = 0
+  let uni = 0
+  for (let i = 0; i < a.union.length; i++) {
+    const p = a.union[i]
+    const q = b.union[i]
+    if (p || q) uni++
+    if (p !== q) xor++
+  }
+  return uni ? xor / uni : 0
 }
