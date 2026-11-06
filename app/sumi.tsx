@@ -7381,7 +7381,7 @@ function AlignRow({
 // ── Inspector building blocks ─────────────────────────────────────────────
 
 const ROW = 'flex items-center gap-2 px-1 py-[5px]'
-const ROW_LABEL = 'w-[76px] shrink-0 truncate font-mono text-[10px] text-white/55'
+const ROW_LABEL = 'w-[88px] shrink-0 truncate font-mono text-[10px] text-white/55'
 const FIELD =
   'min-w-0 flex-1 rounded border border-white/15 bg-[#2a2a2a] px-1.5 py-1 font-mono text-[11px] text-white/90 outline-none focus:border-white/40'
 
@@ -8403,7 +8403,7 @@ function LayerSection({ blend, opacity, up }: { blend: string; opacity: number; 
         options={['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'soft-light', 'hard-light', 'color-burn', 'difference', 'luminosity']}
         onChange={(x) => up({ blend: x })}
       />
-      <DSlider label="opacity" value={opacity} onChange={(n) => up({ opacity: n })} min={0} max={1} step={0.01} />
+      <DSlider label="opacity" value={Math.round(opacity * 100)} onChange={(n) => up({ opacity: n / 100 })} min={0} max={100} step={1} unit="%" />
     </Section>
   )
 }
@@ -13320,7 +13320,7 @@ function SumiEditor() {
           <Tip tip="Copy as SVG or React" place="bottom-end">
           <button
             type="button"
-            className="rounded border border-neutral-300 px-3 py-1 font-mono text-[11px] text-neutral-700 transition-colors duration-150 hover:border-neutral-500 hover:text-ink"
+            className={`${btn} px-3`}
             onClick={() => setCopyOpen((o) => !o)}
             aria-expanded={copyOpen}
             aria-haspopup="menu"
@@ -13787,11 +13787,6 @@ function SumiEditor() {
                           : 'text-neutral-700 hover:bg-black/[0.04] hover:text-ink'
                       } ${e.hidden ? 'opacity-45' : ''}`}
                     >
-                      <span
-                        className="h-2 w-2 shrink-0 rounded-full border border-black/10"
-                        style={{ backgroundColor: (e.v as { color: string }).color }}
-                        aria-hidden="true"
-                      />
                       <span aria-hidden="true">{EL_GLYPH[e.type]}</span>
                       <span className="min-w-0 flex-1 truncate capitalize">{layerLabel(e)}</span>
                     </button>
@@ -14764,8 +14759,8 @@ function SumiEditor() {
           ) : selected ? (
             <>
               <div className="mb-2 flex items-center gap-2 px-1">
-                <span className="flex-1 font-mono text-[12px] text-white">
-                  {EL_GLYPH[selected.type]} {EL_LABEL[selected.type]}
+                <span className="flex-1 truncate font-mono text-[12px] capitalize text-white" title={EL_LABEL[selected.type]}>
+                  {EL_GLYPH[selected.type]} {layerLabel(selected)}
                 </span>
               </div>
 
@@ -14925,7 +14920,7 @@ function SumiEditor() {
                       unit="px"
                     />
                     <DToggle
-                      label="scale pattern with size"
+                      label="scale fill"
                       checked={sv.scaleLinked ?? true}
                       onChange={(x) => up({ scaleLinked: x })}
                     />
