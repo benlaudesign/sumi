@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { FEATURES } from '../src/config/features'
+import { Kbd } from '../src/components/Kbd'
 
 // ── Canvas ────────────────────────────────────────────────────────────────
 
@@ -2268,7 +2269,7 @@ const defHalftone = (p: Palette): HalftoneV => ({
 
 const defText = (p: Palette): TextV => ({
   text: '劉', font: 'Noto Serif JP', size: 460, weight: 600, tracking: 0, lineHeight: 1.15,
-  vertical: false, x: 44, y: 46, rotation: 0, color: '#111111',
+  vertical: true, x: 44, y: 46, rotation: 0, color: '#111111', // tategaki by default; horizontal stays a dial in the inspector
   outline: false, outlineWidth: 2, outlineFill: 'none',
   stamp: 'none', stampWidth: 14, stampRough: 0.55,
   misreg: { on: false, dx: 5, dy: 3, color: p.accent },
@@ -8786,7 +8787,7 @@ export default function Sumi() {
   const [canUndo, setCanUndo] = useState(false)
   const [canRedo, setCanRedo] = useState(false)
   // Checkpoint: the composition as it was before the current run of
-  // generative actions (Shuffle / Randomize / Inspo). Any manual edit ends
+  // generative actions (Randomize / Inspo). Any manual edit ends
   // the run, so the next generative click starts a fresh checkpoint.
   const [hasCheckpoint, setHasCheckpoint] = useState(false)
   const checkpoint = useRef<Snapshot | null>(null)
@@ -10064,53 +10065,6 @@ export default function Sumi() {
     const cols = [p.accent, p.ink, p.alt]
     // Textures/images keep their own look — re-inking them reads as a bug.
     setEls((list) => list.map((e, i) => (e.type === 'texture' || e.type === 'image' ? e : { ...e, v: deepMerge(e.v, { color: cols[i % 3] }) })))
-  }
-
-  const randomize = () => {
-    beginGenerative()
-    pushUndo()
-    const s = Math.floor(Math.random() * 100000)
-    setSeed(s)
-    const rng = mulberry32(s)
-    const pick = <T,>(arr: T[]) => arr[Math.floor(rng() * arr.length)]
-    setEls((list) =>
-      list.map((e) => {
-        if (e.type === 'texture' || e.type === 'image') return e // architectural layers — leave them
-        const patch: Patch =
-          e.type === 'shape'
-            ? {
-                x: Math.round(10 + rng() * 80),
-                y: Math.round(10 + rng() * 80),
-                size: Math.round(40 + rng() * 340),
-                rotation: pick([0, 0, 90, 180, -90]),
-                color: pick([palette.accent, palette.alt, palette.ink]),
-              }
-            : e.type === 'text'
-              ? {
-                  x: Math.round(15 + rng() * 70),
-                  y: Math.round(15 + rng() * 70),
-                  color: pick([palette.accent, palette.ink]),
-                }
-              : (() => {
-                  // Dot size follows spacing (diameter ≤ ~75% of the cell) so
-                  // shuffles never produce a crammed, merged-blob field.
-                  const spacing = Math.round(10 + rng() * 26)
-                  return {
-                    x: Math.round(rng() * 60),
-                    y: Math.round(rng() * 60),
-                    width: Math.round(20 + rng() * 70),
-                    height: Math.round(10 + rng() * 60),
-                    angle: pick([0, 15, 30, 45]),
-                    spacing,
-                    dotSize: Math.round(spacing * (0.14 + rng() * 0.23) * 10) / 10,
-                    jitter: Math.round(rng() * 10) / 10,
-                    color: pick([palette.accent, palette.alt, palette.ink]),
-                    gradient: { direction: pick([0, 90, 180, 270]) },
-                  }
-                })()
-        return { ...e, v: deepMerge(e.v, patch) }
-      }),
-    )
   }
 
   // "Inspo" — riffs on what's already on the page. Reads the current
@@ -13295,7 +13249,7 @@ export default function Sumi() {
               title={`Add ${EL_LABEL[t].toLowerCase()} — press ${EL_KEY[t]}`}
               onClick={() => addEl(t)}
             >
-              + {EL_LABEL[t]} <span className="font-mono text-[9px] text-neutral-400">{EL_KEY[t]}</span>
+              + {EL_LABEL[t]}<Kbd>{EL_KEY[t]}</Kbd>
             </button>
           ))}
           <input
@@ -13321,7 +13275,7 @@ export default function Sumi() {
             title="Upload an image — or just drag one onto the canvas — press i"
             onClick={() => fileInputRef.current?.click()}
           >
-            + Image <span className="font-mono text-[9px] text-neutral-400">i</span>
+            + Image<Kbd>i</Kbd>
           </button>
           <input
             ref={asciiFileInputRef}
@@ -13355,7 +13309,6 @@ export default function Sumi() {
           </button>
         )}
 
-        <button type="button" className={btn} onClick={randomize} title="Shuffle positions, sizes and colors">Shuffle</button>
         <button type="button" className={btn} onClick={randomizeElements} title="Reroll element types, styles and palette">
           Randomize
         </button>
@@ -13372,7 +13325,7 @@ export default function Sumi() {
             type="button"
             className={`${btn} border-red text-red`}
             onClick={revert}
-            title="Jump back to the composition as it was before this Shuffle / Randomize / Inspo run"
+            title="Jump back to the composition as it was before this Randomize / Inspo run"
           >
             Revert
           </button>
@@ -13418,6 +13371,89 @@ export default function Sumi() {
         >
           Preview
         </button>
+        <div className="relative">
+          <button
+            type="button"
+            className="rounded border border-neutral-300 px-3 py-1 font-mono text-[11px] text-neutral-700 transition-colors duration-150 hover:border-neutral-500 hover:text-ink"
+            onClick={() => setCopyOpen((o) => !o)}
+          >
+            Copy ▾
+          </button>
+          {copyOpen && (
+            <>
+              <div className="fixed inset-0 z-[98]" onClick={() => setCopyOpen(false)} />
+              <div className="absolute right-0 top-full z-[99] mt-1.5 w-64 rounded-lg border border-neutral-300 bg-paper p-3 shadow-xl">
+                <h3 className="mb-2.5 font-mono text-[12px] font-semibold text-ink">Copy</h3>
+                <div className="flex gap-1 rounded-md bg-neutral-100 p-1">
+                  {(
+                    [
+                      { key: 'svg', label: 'SVG' },
+                      { key: 'react', label: 'React' },
+                    ] as const
+                  ).map((t) => (
+                    <button
+                      key={t.key}
+                      type="button"
+                      onClick={() => setCopyTab(t.key)}
+                      aria-pressed={copyTab === t.key}
+                      className={`flex-1 rounded px-1.5 py-1 font-mono text-[10.5px] transition-colors duration-100 ${
+                        copyTab === t.key ? 'bg-paper text-ink shadow-sm' : 'text-neutral-600 hover:text-ink'
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+
+                {copyTab === 'svg' && (
+                  <div className="pt-3">
+                    <p className="font-mono text-[10px] leading-relaxed text-neutral-700">
+                      Vector markup, fonts embedded. Paper and Figma need different shapes for the same fills — pick the destination.
+                    </p>
+                    <div className="mt-3 flex gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          copySvg('paper')
+                          setCopyOpen(false)
+                        }}
+                        className="flex-1 rounded border border-ink bg-ink px-3 py-1.5 font-mono text-[11px] text-paper transition-colors duration-150 hover:bg-neutral-800"
+                      >
+                        Copy for Paper
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          copySvg('figma')
+                          setCopyOpen(false)
+                        }}
+                        className="flex-1 rounded border border-ink bg-ink px-3 py-1.5 font-mono text-[11px] text-paper transition-colors duration-150 hover:bg-neutral-800"
+                      >
+                        Copy for Figma
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {copyTab === 'react' && (
+                  <div className="pt-3">
+                    <p className="font-mono text-[10px] leading-relaxed text-neutral-700">Self-contained component for a Next.js project.</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        copyReact()
+                        setCopyOpen(false)
+                      }}
+                      className="mt-3 w-full rounded border border-ink bg-ink px-3 py-1.5 font-mono text-[11px] text-paper transition-colors duration-150 hover:bg-neutral-800"
+                    >
+                      Copy component
+                    </button>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
         <div className="relative">
           <button
             type="button"
@@ -13568,89 +13604,6 @@ export default function Sumi() {
                       className="mt-3 w-full rounded border border-ink bg-ink px-3 py-1.5 font-mono text-[11px] text-paper transition-colors duration-150 hover:bg-neutral-800"
                     >
                       Export SVG
-                    </button>
-                  </div>
-                )}
-              </div>
-            </>
-          )}
-        </div>
-        <div className="relative">
-          <button
-            type="button"
-            className="rounded border border-neutral-300 px-3 py-1 font-mono text-[11px] text-neutral-700 transition-colors duration-150 hover:border-neutral-500 hover:text-ink"
-            onClick={() => setCopyOpen((o) => !o)}
-          >
-            Copy ▾
-          </button>
-          {copyOpen && (
-            <>
-              <div className="fixed inset-0 z-[98]" onClick={() => setCopyOpen(false)} />
-              <div className="absolute right-0 top-full z-[99] mt-1.5 w-64 rounded-lg border border-neutral-300 bg-paper p-3 shadow-xl">
-                <h3 className="mb-2.5 font-mono text-[12px] font-semibold text-ink">Copy</h3>
-                <div className="flex gap-1 rounded-md bg-neutral-100 p-1">
-                  {(
-                    [
-                      { key: 'svg', label: 'SVG' },
-                      { key: 'react', label: 'React' },
-                    ] as const
-                  ).map((t) => (
-                    <button
-                      key={t.key}
-                      type="button"
-                      onClick={() => setCopyTab(t.key)}
-                      aria-pressed={copyTab === t.key}
-                      className={`flex-1 rounded px-1.5 py-1 font-mono text-[10.5px] transition-colors duration-100 ${
-                        copyTab === t.key ? 'bg-paper text-ink shadow-sm' : 'text-neutral-600 hover:text-ink'
-                      }`}
-                    >
-                      {t.label}
-                    </button>
-                  ))}
-                </div>
-
-                {copyTab === 'svg' && (
-                  <div className="pt-3">
-                    <p className="font-mono text-[10px] leading-relaxed text-neutral-700">
-                      Vector markup, fonts embedded. Paper and Figma need different shapes for the same fills — pick the destination.
-                    </p>
-                    <div className="mt-3 flex gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          copySvg('paper')
-                          setCopyOpen(false)
-                        }}
-                        className="flex-1 rounded border border-ink bg-ink px-3 py-1.5 font-mono text-[11px] text-paper transition-colors duration-150 hover:bg-neutral-800"
-                      >
-                        Copy for Paper
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          copySvg('figma')
-                          setCopyOpen(false)
-                        }}
-                        className="flex-1 rounded border border-ink bg-ink px-3 py-1.5 font-mono text-[11px] text-paper transition-colors duration-150 hover:bg-neutral-800"
-                      >
-                        Copy for Figma
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {copyTab === 'react' && (
-                  <div className="pt-3">
-                    <p className="font-mono text-[10px] leading-relaxed text-neutral-700">Self-contained component for a Next.js project.</p>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        copyReact()
-                        setCopyOpen(false)
-                      }}
-                      className="mt-3 w-full rounded border border-ink bg-ink px-3 py-1.5 font-mono text-[11px] text-paper transition-colors duration-150 hover:bg-neutral-800"
-                    >
-                      Copy component
                     </button>
                   </div>
                 )}
