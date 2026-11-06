@@ -13,7 +13,7 @@ export function Tip({ tip, keys = [], place = 'bottom', children, className = ''
       <span
         role="presentation"
         aria-hidden="true"
-        className={`pointer-events-none absolute z-[130] flex items-center gap-1.5 whitespace-nowrap rounded bg-ink px-2 py-1 font-mono text-[10px] text-paper opacity-0 shadow-lg transition-opacity delay-300 duration-100 group-hover/tip:opacity-100 group-focus-within/tip:opacity-100 ${pos}`}
+        className={`pointer-events-none absolute z-[130] flex items-center gap-1.5 whitespace-nowrap rounded border border-white/15 bg-ink px-2 py-1 font-mono text-[10px] text-paper opacity-0 shadow-lg transition-opacity delay-300 duration-100 group-hover/tip:opacity-100 group-focus-within/tip:opacity-100 ${pos}`}
       >
         {tip}
         {keys.length > 0 && (

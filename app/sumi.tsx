@@ -17,6 +17,7 @@ import { Kbd } from '../src/components/Kbd'
 import { Tip } from '../src/components/Tip'
 import { CheatSheet } from '../src/components/CheatSheet'
 import { isMacPlatform, matchShortcut, shortcutChips } from '../src/config/shortcuts'
+import { BUILTIN_FONTS, CURATED_FONTS, fontCssHref, fontLinkId } from '../src/config/fonts'
 import { MIN_EDITOR_WIDTH } from '../src/config/layout'
 import { runInspo, type InspoContext, type InspoEl, type InspoMode, type InspoPage, type InspoResult, type Scored } from '../src/inspo'
 
@@ -79,25 +80,15 @@ const BG_CHIPS = [
 
 // ── Fonts ─────────────────────────────────────────────────────────────────
 
-export const CURATED_FONTS: { name: string; query: string }[] = [
-  { name: 'Noto Serif JP', query: 'Noto+Serif+JP:wght@400;600;900' },
-  { name: 'Shippori Mincho', query: 'Shippori+Mincho:wght@400;600;800' },
-  { name: 'Zen Old Mincho', query: 'Zen+Old+Mincho:wght@400;700;900' },
-  { name: 'Noto Sans JP', query: 'Noto+Sans+JP:wght@400;600;900' },
-  { name: 'Zen Kaku Gothic New', query: 'Zen+Kaku+Gothic+New:wght@400;700;900' },
-  { name: 'DotGothic16', query: 'DotGothic16' },
-  { name: 'Rampart One', query: 'Rampart+One' },
-]
-
-const BUILTIN_FONTS = ['Geist', 'Geist Mono']
+export { CURATED_FONTS }
 
 export function loadGoogleFont(name: string, query?: string) {
-  const id = 'pg-font-' + name.toLowerCase().replace(/\s+/g, '-')
-  if (document.getElementById(id)) return
+  const id = fontLinkId(name)
+  if (document.getElementById(id)) return // app/layout.tsx already linked the curated faces
   const link = document.createElement('link')
   link.id = id
   link.rel = 'stylesheet'
-  link.href = `https://fonts.googleapis.com/css2?family=${query ?? name.trim().replace(/\s+/g, '+')}&display=swap`
+  link.href = fontCssHref(query ?? name.trim().replace(/\s+/g, '+'))
   document.head.appendChild(link)
 }
 
@@ -2198,6 +2189,7 @@ export interface El {
   id: number
   type: ElType
   v: ShapeV | HalftoneV | TextV | TextureV | ImageV | AsciiV | SubjectV
+  name?: string // user-given layer name (double-click the row); absent = derived label
   hidden?: boolean
   locked?: boolean
   frameFurniture?: boolean // created by Frame apply — orphaned (not deleted) on remove
@@ -7341,8 +7333,9 @@ function AlignIcon({ m }: { m: AlignMode | 'dh' | 'dv' }) {
   )
 }
 
-const ALIGN_KEYS: Record<AlignMode, string> = {
-  left: '⌥A', hcenter: '⌥H', right: '⌥D', top: '⌥W', vcenter: '⌥V', bottom: '⌥S',
+// Registry ids per alignment — the chips in the tooltips come from there.
+const ALIGN_SHORTCUT: Record<AlignMode, string> = {
+  left: 'alignLeft', hcenter: 'alignCenterX', right: 'alignRight', top: 'alignTop', vcenter: 'alignCenterY', bottom: 'alignBottom',
 }
 
 function AlignRow({
@@ -7354,26 +7347,36 @@ function AlignRow({
 }) {
   const b =
     'rounded border border-white/15 p-1 text-white/70 transition-colors duration-100 hover:border-white/45 hover:text-white disabled:pointer-events-none disabled:opacity-30'
+  const mac = isMacPlatform()
+  const ALIGN_NAMES: Record<AlignMode, string> = { left: 'Align left', hcenter: 'Align centre (x)', right: 'Align right', top: 'Align top', vcenter: 'Align centre (y)', bottom: 'Align bottom' }
   return (
     <div className="flex flex-wrap items-center gap-1 px-1 py-0.5">
       {(['left', 'hcenter', 'right'] as const).map((m) => (
-        <button key={m} type="button" title={`Align ${m} (${ALIGN_KEYS[m]})`} aria-label={`Align ${m}`} onClick={() => onAlign(m)} className={b}>
-          <AlignIcon m={m} />
-        </button>
+        <Tip key={m} tip={ALIGN_NAMES[m]} keys={shortcutChips(ALIGN_SHORTCUT[m], mac)} place="bottom-start">
+          <button type="button" aria-label={ALIGN_NAMES[m]} onClick={() => onAlign(m)} className={b}>
+            <AlignIcon m={m} />
+          </button>
+        </Tip>
       ))}
       <span className="mx-0.5 h-4 w-px bg-white/15" aria-hidden="true" />
       {(['top', 'vcenter', 'bottom'] as const).map((m) => (
-        <button key={m} type="button" title={`Align ${m} (${ALIGN_KEYS[m]})`} aria-label={`Align ${m}`} onClick={() => onAlign(m)} className={b}>
-          <AlignIcon m={m} />
-        </button>
+        <Tip key={m} tip={ALIGN_NAMES[m]} keys={shortcutChips(ALIGN_SHORTCUT[m], mac)} place="bottom-start">
+          <button type="button" aria-label={ALIGN_NAMES[m]} onClick={() => onAlign(m)} className={b}>
+            <AlignIcon m={m} />
+          </button>
+        </Tip>
       ))}
       <span className="mx-0.5 h-4 w-px bg-white/15" aria-hidden="true" />
-      <button type="button" title="Distribute horizontally (⌃⌥H)" aria-label="Distribute horizontally" disabled={!distributeEnabled} onClick={() => onDistribute('h')} className={b}>
-        <AlignIcon m="dh" />
-      </button>
-      <button type="button" title="Distribute vertically (⌃⌥V)" aria-label="Distribute vertically" disabled={!distributeEnabled} onClick={() => onDistribute('v')} className={b}>
-        <AlignIcon m="dv" />
-      </button>
+      <Tip tip="Distribute (x)" keys={shortcutChips('distributeH', mac)} place="bottom-end">
+        <button type="button" aria-label="Distribute horizontally" disabled={!distributeEnabled} onClick={() => onDistribute('h')} className={b}>
+          <AlignIcon m="dh" />
+        </button>
+      </Tip>
+      <Tip tip="Distribute (y)" keys={shortcutChips('distributeV', mac)} place="bottom-end">
+        <button type="button" aria-label="Distribute vertically" disabled={!distributeEnabled} onClick={() => onDistribute('v')} className={b}>
+          <AlignIcon m="dv" />
+        </button>
+      </Tip>
     </div>
   )
 }
@@ -7447,13 +7450,13 @@ function ShapePicker({ value, onChange }: { value: string; onChange: (x: string)
   return (
     <div className="grid grid-cols-5 gap-1 px-1 py-1">
       {SHAPE_OPTIONS.map((sh) => (
+        <Tip key={sh} tip={sh} className="w-full">
         <button
-          key={sh}
           type="button"
-          title={sh}
-          aria-label={sh}
+          aria-label={`Shape: ${sh}`}
+          aria-pressed={value === sh}
           onClick={() => onChange(sh)}
-          className={`flex aspect-square items-center justify-center rounded border transition-colors duration-100 ${
+          className={`flex aspect-square w-full items-center justify-center rounded border transition-colors duration-100 ${
             value === sh
               ? 'border-white bg-white/10 text-white'
               : 'border-white/15 text-white/55 hover:border-white/40 hover:text-white/90'
@@ -7461,6 +7464,7 @@ function ShapePicker({ value, onChange }: { value: string; onChange: (x: string)
         >
           <ShapeIcon shape={sh} />
         </button>
+        </Tip>
       ))}
     </div>
   )
@@ -7548,13 +7552,13 @@ function FillPicker({ value, onChange }: { value: string; onChange: (x: string) 
   return (
     <div className="grid grid-cols-5 gap-1 px-1 py-1">
       {FILL_OPTIONS.map((f) => (
+        <Tip key={f} tip={f} className="w-full">
         <button
-          key={f}
           type="button"
-          title={f}
           aria-label={`Fill: ${f}`}
+          aria-pressed={value === f}
           onClick={() => onChange(f)}
-          className={`flex aspect-square items-center justify-center rounded border transition-colors duration-100 ${
+          className={`flex aspect-square w-full items-center justify-center rounded border transition-colors duration-100 ${
             value === f
               ? 'border-white bg-white/10 text-white'
               : 'border-white/15 text-white/55 hover:border-white/40 hover:text-white/90'
@@ -7562,6 +7566,7 @@ function FillPicker({ value, onChange }: { value: string; onChange: (x: string) 
         >
           <FillIcon fill={f} />
         </button>
+        </Tip>
       ))}
     </div>
   )
@@ -7945,16 +7950,17 @@ function DColor({
         </div>
         <div className="mt-1.5 flex items-center gap-1 pl-[84px]">
           {GUIDE_COLORS.map((c) => (
-            <button
-              key={c.hex}
+            <Tip key={c.hex} tip={c.name}>
+              <button
               type="button"
-              title={c.name}
+              aria-label={c.name}
               onClick={() => onChange(c.hex)}
               className={`h-4 w-4 rounded-full border transition-transform duration-100 hover:scale-110 ${
                 value.toLowerCase() === c.hex ? 'border-white' : 'border-white/25'
               }`}
               style={{ backgroundColor: c.hex }}
             />
+              </Tip>
           ))}
         </div>
       </div>
@@ -7986,16 +7992,17 @@ function DColor({
           still there for gradients, manual hex entry, and finer control. */}
       <div className="mt-1.5 flex items-center gap-1 pl-[84px]">
         {GUIDE_COLORS.map((c) => (
-          <button
-            key={c.hex}
+          <Tip key={c.hex} tip={c.name}>
+            <button
             type="button"
-            title={c.name}
+            aria-label={c.name}
             onClick={() => onChange(c.hex)}
             className={`h-4 w-4 rounded-full border transition-transform duration-100 hover:scale-110 ${
               !isGrad && value.toLowerCase() === c.hex ? 'border-white' : 'border-white/25'
             }`}
             style={{ backgroundColor: c.hex }}
           />
+            </Tip>
         ))}
       </div>
       {open && (
@@ -8032,16 +8039,17 @@ function DColor({
                 </div>
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
                   {GUIDE_COLORS.map((c) => (
-                    <button
-                      key={c.hex}
+                    <Tip key={c.hex} tip={c.name}>
+                      <button
                       type="button"
-                      title={c.name}
+                      aria-label={c.name}
                       onClick={() => onChange(c.hex)}
                       className={`h-5 w-5 rounded-full border transition-transform duration-100 hover:scale-110 ${
                         value.toLowerCase() === c.hex ? 'border-white' : 'border-white/25'
                       }`}
                       style={{ backgroundColor: c.hex }}
                     />
+                      </Tip>
                   ))}
                 </div>
               </>
@@ -8784,7 +8792,56 @@ function visibleBBox(node: SVGGElement): DOMRect {
   }
 }
 
+// ── Page persistence ─────────────────────────────────────────────────────
+// Pages autosave to localStorage (debounced) and restore on load. The
+// stored shape is versioned; a different version is ignored, never
+// migrated blindly.
+const PAGES_KEY = 'sumi-pages'
+const PAGES_SCHEMA = 1
+interface StoredPages {
+  v: number
+  pages: PageState[]
+  idx: number
+}
+
+// First visit: a curated composition rather than a blank page — one red
+// disc off the centre axis, a tategaki word on the right column, a mono
+// caption on the bottom line.
+function starterPage(p: Palette): PageState {
+  const shape = (patch: Patch) => deepMerge(defShape(p), patch)
+  const text = (patch: Patch) => deepMerge(defText(p), patch)
+  return {
+    bg: p.paper,
+    texture: false,
+    seed: 7,
+    els: [
+      { id: 1, type: 'shape', v: shape({ shape: 'circle', fill: 'solid', color: p.accent, size: 320, x: 38.2, y: 38.2, blur: 0 }) },
+      { id: 2, type: 'text', v: text({ text: '余白', font: 'Shippori Mincho', size: 120, weight: 600, vertical: true, tracking: 0.14, x: 83.33, y: 43.75, color: p.ink }) },
+      { id: 3, type: 'text', v: text({ text: 'MA — THE SPACE BETWEEN', font: 'Geist Mono', size: 18, weight: 400, tracking: 0.32, vertical: false, x: 50, y: 93.75, color: p.ink }) },
+    ],
+  }
+}
+
+function bootPages(p: Palette): { pages: PageState[]; idx: number; restored: boolean } {
+  if (typeof window !== 'undefined') {
+    try {
+      const raw = localStorage.getItem(PAGES_KEY)
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<StoredPages>
+        if (parsed.v === PAGES_SCHEMA && Array.isArray(parsed.pages) && parsed.pages.length > 0) {
+          const idx = Math.min(Math.max(0, Number(parsed.idx) || 0), parsed.pages.length - 1)
+          return { pages: parsed.pages, idx, restored: true }
+        }
+      }
+    } catch {
+      // corrupt storage — fall through to the starter
+    }
+  }
+  return { pages: [starterPage(p)], idx: 0, restored: false }
+}
+
 function layerLabel(e: El): string {
+  if (e.name?.trim()) return e.name.trim()
   if (e.type === 'text') return (e.v as TextV).text.trim() || 'Text'
   if (e.type === 'halftone') return 'Dots'
   if (e.type === 'texture') return (e.v as TextureV).kind
@@ -8858,18 +8915,23 @@ export default function Sumi() {
 
 function SumiEditor() {
   const initialPalette = PALETTES['Tokens']
-  const [els, setEls] = useState<El[]>([{ id: 1, type: 'shape', v: defShape(initialPalette) }])
-  const [selectedIds, setSelectedIds] = useState<number[]>([1])
-  const nextId = useRef(2)
-  const [seed, setSeed] = useState(7)
-  const [bg, setBg] = useState('#f7f6f2')
-  const [view, setView] = useState({ w: VIEW_W, h: VIEW_H })
+  // Restored pages, or the starter composition on a first visit. Lazy so
+  // localStorage is read exactly once, on the client (the editor never
+  // renders on the server — see the desktop gate).
+  const [boot] = useState(() => bootPages(initialPalette))
+  const bootPage = boot.pages[boot.idx]
+  const [els, setEls] = useState<El[]>(() => structuredClone(bootPage.els))
+  const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const nextId = useRef(boot.pages.reduce((m, pg) => pg.els.reduce((mm, e) => Math.max(mm, e.id), m), 0) + 1)
+  const [seed, setSeed] = useState(bootPage.seed)
+  const [bg, setBg] = useState(bootPage.bg)
+  const [view, setView] = useState({ w: bootPage.w ?? VIEW_W, h: bootPage.h ?? VIEW_H })
   // Press — canvas-level ink physics (see PageState).
-  const [bgGrad, setBgGrad] = useState<({ on: boolean } & GradV) | null>(null)
-  const [pressGrain, setPressGrain] = useState(0)
-  const [overprint, setOverprint] = useState(false)
-  const [frame, setFrame] = useState<FrameV | null>(null)
-  const [texture, setTexture] = useState(false)
+  const [bgGrad, setBgGrad] = useState<({ on: boolean } & GradV) | null>(bootPage.bgGrad ?? null)
+  const [pressGrain, setPressGrain] = useState(bootPage.pressGrain ?? 0)
+  const [overprint, setOverprint] = useState(bootPage.overprint ?? false)
+  const [frame, setFrame] = useState<FrameV | null>(bootPage.frame ?? null)
+  const [texture, setTexture] = useState(bootPage.texture)
   const [paletteName, setPaletteName] = useState('Tokens')
   const [cappedIds, setCappedIds] = useState<Record<number, boolean>>({})
   const [toast, setToast] = useState('')
@@ -9223,10 +9285,15 @@ function SumiEditor() {
   const selected = els.find((e) => e.id === selectedId) ?? null
   const fontOptions = useMemo(() => [...BUILTIN_FONTS, ...CURATED_FONTS.map((f) => f.name), ...customFonts], [customFonts])
 
-  const flash = useCallback((msg: string) => {
+  const [toastAction, setToastAction] = useState<{ label: string; run: () => void } | null>(null)
+  const flash = useCallback((msg: string, action?: { label: string; run: () => void }) => {
     setToast(msg)
+    setToastAction(action ?? null)
     if (toastTimer.current) clearTimeout(toastTimer.current)
-    toastTimer.current = setTimeout(() => setToast(''), 1800)
+    toastTimer.current = setTimeout(() => {
+      setToast('')
+      setToastAction(null)
+    }, action ? 6000 : 1800)
   }, [])
 
   const gRef = useCallback((id: number, node: SVGGElement | null) => {
@@ -9409,10 +9476,10 @@ function SumiEditor() {
   // ── Pages & save slots ──────────────────────────────────────────────────
   // The active page lives in els/bg/texture/seed; `pages` stores snapshots
   // of every page, refreshed whenever we leave one.
-  const [pages, setPages] = useState<PageState[]>([{ els: [], bg: '#f7f6f2', texture: false, seed: 7 }])
+  const [pages, setPages] = useState<PageState[]>(boot.pages)
   // Where the canvas is checked out from: an active page or a saved page.
   // A page lives in exactly one section; edits bank back to its home.
-  const [loc, setLoc] = useState<{ kind: 'page'; idx: number } | { kind: 'slot'; id: string }>({ kind: 'page', idx: 0 })
+  const [loc, setLoc] = useState<{ kind: 'page'; idx: number } | { kind: 'slot'; id: string }>({ kind: 'page', idx: boot.idx })
   const [slots, setSlots] = useState<SaveSlot[]>([])
   const [renamingSlot, setRenamingSlot] = useState<string | null>(null)
 
@@ -9533,6 +9600,27 @@ function SumiEditor() {
     name: loc.kind === 'page' ? pages[loc.idx]?.name : undefined,
   })
 
+  // Autosave — the pages list with the live page banked in, debounced.
+  // Slot checkouts persist through persistSlots already; the pages list
+  // still saves so switching back finds it.
+  const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (autosaveTimer.current) clearTimeout(autosaveTimer.current)
+    autosaveTimer.current = setTimeout(() => {
+      const live = loc.kind === 'page' ? pages.map((pg, i) => (i === loc.idx ? { ...currentPage(), name: pg.name } : pg)) : pages
+      const payload: StoredPages = { v: PAGES_SCHEMA, pages: live, idx: loc.kind === 'page' ? loc.idx : 0 }
+      try {
+        localStorage.setItem(PAGES_KEY, JSON.stringify(payload))
+      } catch {
+        // quota (large images) or private mode — the session keeps working, it just won't restore
+      }
+    }, 800)
+    return () => {
+      if (autosaveTimer.current) clearTimeout(autosaveTimer.current)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [els, bg, texture, seed, view, bgGrad, pressGrain, overprint, frame, pages, loc])
+
   const setCanvasSize = (w: number, h: number) => {
     const cw = Math.round(Math.min(4000, Math.max(50, w || VIEW_W)))
     const ch = Math.round(Math.min(4000, Math.max(50, h || VIEW_H)))
@@ -9560,7 +9648,23 @@ function SumiEditor() {
 
   const deletePage = (i: number) => {
     const blank = (): PageState => ({ els: [], bg: '#f7f6f2', texture: false, seed: Math.floor(Math.random() * 100000) })
+    // Bank the live canvas first so an undo restores exactly what was showing.
+    const removed: PageState = loc.kind === 'page' && loc.idx === i ? { ...currentPage(), name: pages[i]?.name } : pages[i]
+    const removedName = removed?.name ?? `Page ${i + 1}`
     const remaining = pages.filter((_, j) => j !== i)
+    flash(`Deleted "${removedName}"`, {
+      label: 'Undo',
+      run: () => {
+        setPages((arr) => {
+          const next = [...arr]
+          next.splice(Math.min(i, next.length), 0, removed)
+          return next
+        })
+        bankCurrent()
+        setLoc({ kind: 'page', idx: Math.min(i, pages.length - 1) })
+        loadPage(removed)
+      },
+    })
     if (loc.kind === 'page' && loc.idx === i) {
       // The page under the canvas was deleted — fall back to a neighbour,
       // or a fresh blank page if it was the last one.
@@ -10160,6 +10264,16 @@ function SumiEditor() {
       }
       return arr
     })
+  }
+
+  const [renamingLayer, setRenamingLayer] = useState<number | null>(null)
+  const renameLayer = (id: number, name: string) => {
+    const clean = name.trim()
+    setRenamingLayer(null)
+    const cur = els.find((e) => e.id === id)
+    if (!cur || (cur.name ?? '') === clean) return
+    pushUndo()
+    setEls((list) => list.map((e) => (e.id === id ? { ...e, name: clean || undefined } : e)))
   }
 
   const toggleHide = (id: number) => {
@@ -13045,16 +13159,17 @@ function SumiEditor() {
             <div className="absolute right-4 top-4 flex items-center gap-2">
               <div className="flex items-center gap-1.5 rounded-full bg-ink/85 px-3 py-2 shadow-lg">
                 {PREVIEW_BGS.map((c) => (
-                  <button
-                    key={c}
+                  <Tip key={c} tip={c}>
+                    <button
                     type="button"
-                    title={c}
+                    aria-label={c}
                     onClick={() => setPreviewBg(c)}
                     className={`h-4 w-4 rounded-full border transition-transform duration-100 hover:scale-110 ${
                       previewBg === c ? 'border-white' : 'border-white/30'
                     }`}
                     style={{ backgroundColor: c }}
                   />
+                    </Tip>
                 ))}
                 <input
                   type="color"
@@ -13768,6 +13883,21 @@ function SumiEditor() {
                     onDragEnd={() => { dragLayer.current = null; setDropHint(null) }}
                     className={`group flex items-center gap-1 border-y-2 border-transparent ${hint}`}
                   >
+                    {renamingLayer === e.id ? (
+                      <input
+                        autoFocus
+                        defaultValue={e.name ?? layerLabel(e)}
+                        aria-label="Layer name"
+                        onFocus={(ev) => ev.target.select()}
+                        onBlur={(ev) => renameLayer(e.id, ev.target.value)}
+                        onKeyDown={(ev) => {
+                          ev.stopPropagation()
+                          if (ev.key === 'Enter') renameLayer(e.id, (ev.target as HTMLInputElement).value)
+                          if (ev.key === 'Escape') setRenamingLayer(null)
+                        }}
+                        className="min-w-0 flex-1 rounded border border-neutral-300 bg-paper px-2 py-1 font-mono text-[11px] outline-none focus:border-ink"
+                      />
+                    ) : (
                     <button
                       type="button"
                       onClick={(ev) =>
@@ -13779,7 +13909,8 @@ function SumiEditor() {
                             : [e.id],
                         )
                       }
-                      title="Drag to reorder · Backspace deletes"
+                      onDoubleClick={() => setRenamingLayer(e.id)}
+                      title="Drag to reorder · double-click to rename"
                       data-tier={elTier(e)}
                       className={`flex min-w-0 flex-1 items-center gap-1.5 rounded px-2 py-1 text-left font-mono text-[11px] transition-colors duration-150 ${
                         selectedIds.includes(e.id)
@@ -13790,10 +13921,11 @@ function SumiEditor() {
                       <span aria-hidden="true">{EL_GLYPH[e.type]}</span>
                       <span className="min-w-0 flex-1 truncate capitalize">{layerLabel(e)}</span>
                     </button>
+                    )}
+                    <Tip tip={e.locked ? 'Unlock layer' : 'Lock layer · clicks pass through'} place="bottom-end">
                     <button
                       type="button"
                       onClick={() => toggleLock(e.id)}
-                      title={e.locked ? 'Unlock layer' : 'Lock layer — clicks pass through it'}
                       aria-label={e.locked ? 'Unlock layer' : 'Lock layer'}
                       className={`shrink-0 rounded border border-neutral-300 bg-paper p-1 text-ink transition-colors duration-150 hover:border-neutral-500 ${
                         e.locked ? '' : 'opacity-0 transition-opacity duration-100 group-hover:opacity-100 focus-visible:opacity-100'
@@ -13811,10 +13943,11 @@ function SumiEditor() {
                         </svg>
                       )}
                     </button>
+                    </Tip>
+                    <Tip tip={e.hidden ? 'Show layer' : 'Hide layer'} place="bottom-end">
                     <button
                       type="button"
                       onClick={() => toggleHide(e.id)}
-                      title={e.hidden ? 'Show layer' : 'Hide layer'}
                       aria-label={e.hidden ? 'Show layer' : 'Hide layer'}
                       className={`shrink-0 rounded border border-neutral-300 bg-paper p-1 text-ink transition-colors duration-150 hover:border-neutral-500 ${
                         e.hidden ? '' : 'opacity-0 transition-opacity duration-100 group-hover:opacity-100 focus-visible:opacity-100'
@@ -13831,6 +13964,7 @@ function SumiEditor() {
                         </svg>
                       )}
                     </button>
+                    </Tip>
                   </li>
                 )
               })}
@@ -14412,8 +14546,21 @@ function SumiEditor() {
 
           {/* Bottom-left corner of the workspace — off the artwork */}
           {toast && (
-            <div className="fixed bottom-4 left-60 z-[95] rounded-full bg-ink px-4 py-1.5 font-mono text-[11px] text-paper shadow-lg">
+            <div className="fixed bottom-4 left-60 z-[95] flex items-center gap-3 rounded-full bg-ink px-4 py-1.5 font-mono text-[11px] text-paper shadow-lg" role="status">
               {toast}
+              {toastAction && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    toastAction.run()
+                    setToast('')
+                    setToastAction(null)
+                  }}
+                  className="rounded border border-paper/40 px-2 py-0.5 text-[10px] text-paper hover:border-paper"
+                >
+                  {toastAction.label}
+                </button>
+              )}
             </div>
           )}
 
@@ -15106,7 +15253,7 @@ function SumiEditor() {
                           <button
                             key={c.hex}
                             type="button"
-                            title={`${c.name} → selection ${prop === 'color' ? 'text' : 'highlight'}`}
+                            aria-label={`${c.name} → selection ${prop === 'color' ? 'text' : 'highlight'}`}
                             disabled={!activeSel}
                             onMouseDown={(e) => e.preventDefault()}
                             onClick={() => applyRange({ [prop]: c.hex })}
@@ -15724,14 +15871,15 @@ function SumiEditor() {
               <Section title="Surface">
                 <div className="mb-1 flex items-center gap-1.5 px-1">
                   {BG_CHIPS.map((c) => (
-                    <button
-                      key={c.hex}
+                    <Tip key={c.hex} tip={c.name}>
+                      <button
                       type="button"
-                      title={c.name}
+                      aria-label={c.name}
                       onClick={() => { pushUndo(); setBg(c.hex) }}
                       className={`h-6 w-6 rounded-full border ${bg === c.hex ? 'border-white' : 'border-white/20'}`}
                       style={{ backgroundColor: c.hex }}
                     />
+                      </Tip>
                   ))}
                 </div>
                 <DColor label="custom" value={bg} onChange={(x) => { pushUndoCoalesced('bg'); setBg(x) }} />

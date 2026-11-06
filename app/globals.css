@@ -67,3 +67,9 @@ g[data-locked] * {
 @theme {
   --color-red: #e13834;
 }
+
+/* Keyboard focus is visible everywhere; pointer focus stays quiet. */
+:where(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-red);
+  outline-offset: 2px;
+}
