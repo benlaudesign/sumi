@@ -15,8 +15,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { FEATURES } from '../src/config/features'
 import { Kbd } from '../src/components/Kbd'
 import { Tip } from '../src/components/Tip'
-import { DialRoot, useDialKit } from 'dialkit'
-import 'dialkit/styles.css'
+import { DEV, DialPanel, useDials } from '../src/dev/dials'
 import { INSPO_NAV, INSPO_NAV_VARIANTS, type InspoNavVariant, type LightboxLayout } from '../src/config/inspoNav'
 import { CheatSheet } from '../src/components/CheatSheet'
 import { isMacPlatform, matchShortcut, shortcutChips } from '../src/config/shortcuts'
@@ -9026,7 +9025,7 @@ export default function Sumi() {
       )}
       {!wide && <DesktopOnlyNotice />}
       {/* DialKit's floating panel — dev-only tuning (Inspo nav, Layout). */}
-      {process.env.NODE_ENV !== 'production' && <DialRoot position="bottom-right" defaultOpen={false} />}
+      <DialPanel />
     </>
   )
 }
@@ -13170,7 +13169,7 @@ function SumiEditor() {
     const q = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('nav') : null
     return INSPO_NAV_VARIANTS.includes(q as InspoNavVariant) ? (q as InspoNavVariant) : INSPO_NAV.variant
   })
-  const nav = useDialKit('Inspo nav', {
+  const nav = useDials('Inspo nav', {
     variant: { type: 'select', options: INSPO_NAV_VARIANTS, default: navDefault },
     transitionMs: [INSPO_NAV.transitionMs, 0, 600, 10],
     thumbPx: [INSPO_NAV.thumbPx, 72, 240, 4],
@@ -13243,7 +13242,7 @@ function SumiEditor() {
     window.clearTimeout(watchdog)
     if (runId !== inspoRunId.current) return
     setInspoSlots(null)
-    if (process.env.NODE_ENV !== 'production') {
+    if (DEV) {
       const rates = Object.entries(res.rejectionsByRule).map(([k, v]) => `${k} ${Math.round((v / res.tries) * 100)}%`).join(' · ')
       console.info(`[inspo] seed ${batchSeed}: ${res.passing.length}/${res.tries} passed · shown ${res.shown.map((c) => c.tier[0]).join('')} · rejections: ${rates || 'none'}`)
     }
@@ -14198,10 +14197,10 @@ function SumiEditor() {
               <span className="text-[10px] uppercase tracking-[0.18em] text-muted">Inspo</span>
               <button type="button" className={`${btn} px-1.5`} onClick={closeInspo} title="Close (Esc)" aria-label="Close Inspo">×</button>
             </div>
-            <button type="button" className={btn} onClick={inspoMore} disabled={inspoBusy} title={`Next batch (seed ${inspoSeed} → ${(inspoSeed + 1) % 100000})`}>
+            <button type="button" className={btn} onClick={inspoMore} disabled={inspoBusy} title={DEV ? `Next batch (seed ${inspoSeed} → ${(inspoSeed + 1) % 100000})` : 'Next batch'}>
               More
             </button>
-            <p className="text-[10px] leading-4 text-neutral-700" title={inspoResult ? `seed ${inspoResult.batchSeed} · ${inspoResult.passing.length} of ${inspoResult.tries} passed (dev)` : undefined}>
+            <p className="text-[10px] leading-4 text-neutral-700" title={DEV && inspoResult ? `seed ${inspoResult.batchSeed} · ${inspoResult.passing.length} of ${inspoResult.tries} passed (dev)` : undefined}>
               {inspoBusy ? 'generating…' : ''}
             </p>
           </div>
@@ -14916,7 +14915,7 @@ function SumiEditor() {
             const controls = (
               <div className="flex shrink-0 flex-col justify-between gap-2 self-stretch pr-3" style={{ borderRight: '1px solid var(--color-neutral-300)' }} role="group" aria-label="Inspo controls">
                 <div className="flex items-center gap-1.5">
-                  <button type="button" className={`${btn} py-0.5`} onClick={inspoMore} disabled={inspoBusy} title={`Next batch (seed ${inspoSeed} → ${(inspoSeed + 1) % 100000})`}>
+                  <button type="button" className={`${btn} py-0.5`} onClick={inspoMore} disabled={inspoBusy} title={DEV ? `Next batch (seed ${inspoSeed} → ${(inspoSeed + 1) % 100000})` : 'Next batch'}>
                     More<Kbd>m</Kbd>
                   </button>
                   <button type="button" className={`${btn} px-1.5 py-0.5`} onClick={navCancel} aria-label="Close Inspo (Esc)">×</button>
@@ -14924,7 +14923,7 @@ function SumiEditor() {
                 <span
                   className={`font-mono text-[10px] tabular-nums text-neutral-700 ${navCount === 0 ? 'invisible' : ''}`}
                   aria-live="polite"
-                  title={inspoResult ? `seed ${inspoResult.batchSeed} · ${inspoResult.passing.length} of ${inspoResult.tries} passed (dev)` : undefined}
+                  title={DEV && inspoResult ? `seed ${inspoResult.batchSeed} · ${inspoResult.passing.length} of ${inspoResult.tries} passed (dev)` : undefined}
                 >
                   {navIdx} / {navCount}
                 </span>
@@ -14948,7 +14947,7 @@ function SumiEditor() {
                 }}
                 onFocus={() => navShow(i)}
                 onClick={() => navKeep(i)}
-                title={c ? `${c.tier} · ${c.dims.join(' + ')} · ${c.seed} · score ${Math.round(c.score * 100)} (dev)` : 'The page as it is'}
+                title={DEV ? (c ? `${c.tier} · ${c.dims.join(' + ')} · ${c.seed} · score ${Math.round(c.score * 100)} (dev)` : 'The page as it is') : undefined}
                 aria-label={c ? `Keep ${c.archetype} (${c.seed})` : 'Keep the original'}
                 data-tier={c?.tier}
                 className={`group/th flex shrink-0 flex-col items-start gap-1 rounded-sm text-left transition-transform duration-150 focus:outline-none ${i === navIdx ? '-translate-y-px' : ''} ${muted ? 'opacity-70' : ''}`}
@@ -16241,7 +16240,7 @@ function SumiEditor() {
       {/* Floating Inspo control — Subtle/Bold, seed, More — shared by every non-tray variant. */}
       {inspoOpen && navVariant !== 'tray' && navVariant !== 'filmstrip' && (
         <div className="fixed left-1/2 top-[50px] z-[126] flex -translate-x-1/2 items-center gap-2 rounded-full border border-neutral-300 bg-paper px-2 py-1 font-mono text-[10.5px] shadow-xl" role="group" aria-label="Inspo controls">
-          <button type="button" className={`${btn} py-0.5`} onClick={inspoMore} disabled={inspoBusy} title={inspoResult ? `seed ${inspoResult.batchSeed} · ${inspoResult.passing.length}/${inspoResult.tries} (dev)` : undefined}>
+          <button type="button" className={`${btn} py-0.5`} onClick={inspoMore} disabled={inspoBusy} title={DEV && inspoResult ? `seed ${inspoResult.batchSeed} · ${inspoResult.passing.length}/${inspoResult.tries} (dev)` : undefined}>
             More<Kbd>m</Kbd>
           </button>
           <button type="button" className={`${btn} px-1.5 py-0.5`} onClick={navCancel} aria-label="Close Inspo">×</button>
