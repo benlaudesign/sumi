@@ -53,23 +53,23 @@ export interface Palette {
 
 // Restrained register — paper / ink / one red. The original board.
 export const PALETTES: Record<string, Palette> = {
-  'Ink / vermilion': { paper: '#f4f4f2', ink: '#111111', accent: '#bc002d', alt: '#e13834' },
-  'Red / black': { paper: '#f6f3ec', ink: '#141414', accent: '#d93a2b', alt: '#141414' },
+  'Vermilion': { paper: '#f4f4f2', ink: '#111111', accent: '#bc002d', alt: '#e13834' },
+  'Scarlet': { paper: '#f6f3ec', ink: '#141414', accent: '#d93a2b', alt: '#141414' },
   'Indigo': { paper: '#f2efe6', ink: '#1c3461', accent: '#2c4e8f', alt: '#101f3c' },
-  'Red / cream': { paper: '#f1e8d7', ink: '#3a2e26', accent: '#c73e2e', alt: '#a8322a' },
-  'Ink + red': { paper: '#f7f6f2', ink: '#0e0e0e', accent: '#0e0e0e', alt: '#bc002d' },
+  'Cream': { paper: '#f1e8d7', ink: '#3a2e26', accent: '#c73e2e', alt: '#a8322a' },
+  'Sumi': { paper: '#f7f6f2', ink: '#0e0e0e', accent: '#0e0e0e', alt: '#bc002d' },
 }
 
 // Expressive register — two/three-ink print combinations doing emotional
 // work, distilled from the second board's recurring pairings. Same Palette
 // shape so both registers drive every existing dial and can mix freely.
 const EXPRESSIVE_PALETTES: Record<string, Palette> = {
-  'Teal / pink': { paper: '#f2ede3', ink: '#1c1c1c', accent: '#2fa8a0', alt: '#e2789f' },
-  'Yellow field': { paper: '#f0c93d', ink: '#241f1a', accent: '#d8432b', alt: '#f6ecd2' },
+  'Teal': { paper: '#f2ede3', ink: '#1c1c1c', accent: '#2fa8a0', alt: '#e2789f' },
+  'Yellow': { paper: '#f0c93d', ink: '#241f1a', accent: '#d8432b', alt: '#f6ecd2' },
   'Ultramarine': { paper: '#ece7da', ink: '#20439c', accent: '#d8386b', alt: '#e5d44a' },
   'Sunset': { paper: '#f4e3c2', ink: '#22304e', accent: '#c23a2b', alt: '#e88a3a' },
-  'Green / gold': { paper: '#f0ead8', ink: '#232323', accent: '#7c9b3f', alt: '#c9a23f' },
-  'Indigo sea': { paper: '#e9e4d6', ink: '#2b3a6b', accent: '#d84b33', alt: '#4aa5a2' },
+  'Olive': { paper: '#f0ead8', ink: '#232323', accent: '#7c9b3f', alt: '#c9a23f' },
+  'Sea': { paper: '#e9e4d6', ink: '#2b3a6b', accent: '#d84b33', alt: '#4aa5a2' },
 }
 
 const ALL_PALETTES: Record<string, Palette> = { ...PALETTES, ...EXPRESSIVE_PALETTES }
@@ -2201,9 +2201,9 @@ export interface El {
   frameSlot?: string // 'numeral' | 'label' | 'year' | 'seal' — which furniture toggle owns this layer
 }
 
-const EL_LABEL: Record<ElType, string> = { shape: 'Shape', halftone: 'Dots', text: 'Text', texture: 'Material', image: 'Image', ascii: 'Ascii', subject: 'Subject' }
+const EL_LABEL: Record<ElType, string> = { shape: 'Shape', halftone: 'Dots', text: 'Text', texture: 'Texture', image: 'Image', ascii: 'Ascii', subject: 'Subject' }
 // Single-key add-element shortcuts (no modifier; guarded against inputs).
-const EL_KEY: Record<ElType, string> = { shape: 's', halftone: 'd', text: 't', texture: 'm', image: 'i', ascii: 'a', subject: 'k' }
+const EL_KEY: Record<ElType, string> = { shape: 's', halftone: 'd', text: 't', texture: 'x', image: 'i', ascii: 'a', subject: 'k' }
 const EL_GLYPH: Record<ElType, string> = { shape: '●', halftone: '⠿', text: '文', texture: '▨', image: '▣', ascii: '⣿', subject: '鯉' }
 
 const TEXTURE_KINDS = ['washi', 'frost', 'glass', 'screen', 'grain', 'wash']
@@ -6995,6 +6995,7 @@ export function makeInspoCtx(palette: Palette, fonts: string[]): InspoContext {
   return {
     palette,
     palettes: { restrained: PALETTES, expressive: EXPRESSIVE_PALETTES },
+    presets: { shape: SHAPE_PRESETS as unknown as Record<string, (p: Palette) => Record<string, unknown>>, text: TEXT_PRESETS as unknown as Record<string, (p: Palette) => Record<string, unknown>> },
     fonts,
     subjectAllowed: FEATURES.subject,
     makeDefault: (type) => DEFAULTS[type](palette) as unknown as Record<string, unknown>,
@@ -8970,7 +8971,7 @@ export default function Sumi() {
 }
 
 function SumiEditor() {
-  const initialPalette = PALETTES['Ink / vermilion']
+  const initialPalette = PALETTES['Vermilion']
   // Restored pages, or the starter composition on a first visit. Lazy so
   // localStorage is read exactly once, on the client (the editor never
   // renders on the server — see the desktop gate).
@@ -8988,7 +8989,7 @@ function SumiEditor() {
   const [overprint, setOverprint] = useState(bootPage.overprint ?? false)
   const [frame, setFrame] = useState<FrameV | null>(bootPage.frame ?? null)
   const [texture, setTexture] = useState(bootPage.texture)
-  const [paletteName, setPaletteName] = useState('Ink / vermilion')
+  const [paletteName, setPaletteName] = useState('Vermilion')
   const [cappedIds, setCappedIds] = useState<Record<number, boolean>>({})
   const [toast, setToast] = useState('')
   const [customFonts, setCustomFonts] = useState<string[]>([])
@@ -9329,7 +9330,7 @@ function SumiEditor() {
   previewRef.current = preview
   const previewLenRef = useRef(1)
 
-  const palette = ALL_PALETTES[paletteName] ?? PALETTES['Ink / vermilion']
+  const palette = ALL_PALETTES[paletteName] ?? PALETTES['Vermilion']
   const undoStack = useRef<Snapshot[]>([])
   const redoStack = useRef<Snapshot[]>([])
   const svgRef = useRef<SVGSVGElement>(null)
@@ -10457,7 +10458,7 @@ function SumiEditor() {
   const applyPalette = (name: string) => {
     pushUndo()
     setPaletteName(name)
-    const p = ALL_PALETTES[name] ?? PALETTES['Ink / vermilion']
+    const p = ALL_PALETTES[name] ?? PALETTES['Vermilion']
     setBg(p.paper)
     const cols = [p.accent, p.ink, p.alt]
     // Textures/images keep their own look — re-inking them reads as a bug.
@@ -12735,7 +12736,7 @@ function SumiEditor() {
         case 'addShape': addElRef.current('shape'); break
         case 'addDots': addElRef.current('halftone'); break
         case 'addText': addElRef.current('text'); break
-        case 'addMaterial': addElRef.current('texture'); break
+        case 'addTexture': addElRef.current('texture'); break
         case 'addAscii': addElRef.current('ascii'); break
         case 'addImage': fileInputRef.current?.click(); break
         case 'addSubject':
@@ -13004,7 +13005,7 @@ function SumiEditor() {
       </>
     )
     const printActive = texture || !!bgGrad?.on || overprint || pressGrain > 0
-    const active = ALL_PALETTES[paletteName] ?? PALETTES['Ink / vermilion']
+    const active = ALL_PALETTES[paletteName] ?? PALETTES['Vermilion']
     const swatches = (pp: Palette, cls: string) => (
       <span className={`flex overflow-hidden rounded-[2px] ${cls}`} style={{ gap: 1 }}>
         {[pp.paper, pp.ink, pp.accent, pp.alt].map((c, i) => (
@@ -13179,7 +13180,10 @@ function SumiEditor() {
     setPreviewEls(null)
     setFadeFrom(null)
   }
+  const [inspoBaseEmpty, setInspoBaseEmpty] = useState(false)
+  const pageIsEmpty = els.filter((e) => !e.hidden && !e.frameFurniture && e.type !== 'texture').length === 0
   const openInspo = () => {
+    setInspoBaseEmpty(pageIsEmpty)
     setInspoOpen(true)
     resetNav()
     void runInspoBatch(inspoSeed)
@@ -13816,7 +13820,7 @@ function SumiEditor() {
           </button>
         )}
 
-        <Tip tip="Six compositions that keep this page's signature">
+        <Tip tip={pageIsEmpty ? 'Start from a composition' : "Six compositions that keep this page's signature"}>
           <button
             type="button"
             className={`${btn} ${inspoOpen ? 'border-neutral-600 bg-black/[0.05]' : ''}`}
@@ -15153,8 +15157,8 @@ function SumiEditor() {
                   {/* Pinned: stays put while the batches scroll underneath. */}
                   <div className="sticky left-0 z-10 flex shrink-0 items-stretch bg-paper pr-1" style={{ gap: nav.thumbGapPx, marginLeft: -12, paddingLeft: 12 }}>
                     {controls}
-                    {thumb(null, 0, true)}
-                    <div className="w-px shrink-0 self-stretch bg-neutral-300" aria-hidden="true" />
+                    {!inspoBaseEmpty && thumb(null, 0, true)}
+                    {!inspoBaseEmpty && <div className="w-px shrink-0 self-stretch bg-neutral-300" aria-hidden="true" />}
                   </div>
                   {thumbs}
                   {skeletons}
@@ -16083,7 +16087,7 @@ function SumiEditor() {
                       <DSlider label="radius" value={iv.effectScale ?? 10} onChange={(n) => up({ effectScale: n })} min={1} max={40} step={1} />
                     )}
                     <p className="px-1 py-1 text-[10px] leading-4 text-white/45">
-                      Effects ride with the image. For a treatment over part of it (or over several layers), use a Material block instead.
+                      Effects ride with the image. For a treatment over part of it (or over several layers), use a Texture block instead.
                     </p>
                   </Section>
                   <LayerSection blend={iv.blend} opacity={iv.opacity} up={up} />

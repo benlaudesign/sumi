@@ -48,6 +48,8 @@ export interface InspoContext {
   palette: Palette
   // Curated palettes the palette dimension may reach for.
   palettes: { restrained: Record<string, Palette>; expressive: Record<string, Palette> }
+  // The editor's own presets — starters on an empty page are built from them.
+  presets: { shape: Record<string, (p: Palette) => ElValues>; text: Record<string, (p: Palette) => ElValues> }
   fonts: string[]
   subjectAllowed: boolean
   makeDefault: (type: InspoElType) => ElValues

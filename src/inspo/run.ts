@@ -58,7 +58,9 @@ export async function runInspo(o: RunOptions): Promise<InspoResult> {
   const { base, batchSeed, ctx } = o
   const maxTries = o.maxTries ?? RULES.generation.maxTries
   const show = o.show ?? RULES.generation.show
-  const quota = RULES.tiers.perBatch
+  // An empty page gets six starters — all "close" (nothing to be far from).
+  const baseEmpty = base.els.filter((e) => !e.hidden && !e.frameFurniture && e.type !== 'texture').length === 0
+  const quota = baseEmpty ? { close: show, mid: 0, far: 0 } : RULES.tiers.perBatch
   const area = frameArea(base)
   const baseM = await measurePage(base.els, base, ctx)
   const signature = extractSignature(base.els, base.bg, baseM, ctx)
@@ -76,7 +78,7 @@ export async function runInspo(o: RunOptions): Promise<InspoResult> {
     if (i >= RULES.generation.firstBatch && short().length === 0) break
     // Round-robin over the tiers still short; everything short → far moves.
     const open = short()
-    const tier: Tier = open.length ? open[i % open.length] : TIERS[i % 3]
+    const tier: Tier = baseEmpty ? 'close' : open.length ? open[i % open.length] : TIERS[i % 3]
     tries++
     const cand = generateCandidate(base, signature, baseM, batchSeed, i, { tier, widen: widen && tier === 'far' }, ctx)
     const a = analyticRules(cand, base, signature, baseM)

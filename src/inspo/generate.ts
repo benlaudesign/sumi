@@ -6,7 +6,7 @@
 
 import { contrast, luminance, normHex } from './color'
 import { snapX, snapY } from './grid'
-import { CAPTIONS, CHARS, JP_SERIFS, JP_WORDS } from './pools'
+import { CAPTIONS, CHARS, JP_SERIFS, JP_WORDS, ROMAJI } from './pools'
 import { between, chance, mulberry32, pick, trySeed, type Rng } from './rng'
 import { DIMENSIONS, RULES, type Dimension, type Tier } from './rules'
 import { designEls, detectScript } from './signature'
@@ -265,13 +265,49 @@ export function generateCandidate(base: InspoPage, sig: Signature, baseM: Measur
   let nextNewId = NEW_ID_BASE + tryIndex * 100
   const mk = (type: InspoElType, patch: ElValues): InspoEl => ({ id: nextNewId++, type, v: { ...ctx.makeDefault(type), ...patch } })
 
+  // ── Empty page: a starter from the presets + pools, in a Restrained palette ──
+  // It then goes through the same composition pass as any page.
+  let bg = base.bg
+  let paletteName: string | undefined
+  if (mutable.length === 0) {
+    const [pName, pal] = pick(rng, Object.entries(ctx.palettes.restrained))
+    bg = normHex(pal.paper) ?? pal.paper
+    paletteName = pName
+    const shapePresets = Object.keys(ctx.presets.shape)
+    const textPresets = ['Tategaki column', 'Massive character', 'Display black', 'Outline display', 'Type wall', 'Caption mono'].filter((n) => n in ctx.presets.text)
+    const textFor = (preset: string): string =>
+      preset === 'Massive character' ? pick(rng, CHARS)
+      : preset === 'Tategaki column' || preset === 'Type wall' ? pick(rng, JP_WORDS)
+      : preset === 'Caption mono' ? pick(rng, CAPTIONS)
+      : pick(rng, ROMAJI)
+    const shapeEl = () => mk('shape', ctx.presets.shape[pick(rng, shapePresets)](pal))
+    const textEl = (preset: string) => mk('text', { ...ctx.presets.text[preset](pal), text: textFor(preset) })
+    const kind = pick(rng, ['shape', 'type', 'both', 'both'] as const)
+    const starters: InspoEl[] = []
+    if (kind === 'shape') {
+      starters.push(shapeEl())
+      if (chance(rng, 0.5)) starters.push(textEl('Caption mono'))
+    } else if (kind === 'type') {
+      starters.push(textEl(pick(rng, textPresets.filter((n) => n !== 'Caption mono'))))
+      if (chance(rng, 0.4)) starters.push(textEl('Caption mono'))
+    } else {
+      starters.push(shapeEl())
+      starters.push(textEl(pick(rng, textPresets.filter((n) => n !== 'Caption mono'))))
+    }
+    for (const e of starters) {
+      all.push(e)
+      mutable.push(e)
+    }
+  }
+  const starter = base.els.filter((e) => !e.hidden && !e.frameFurniture && e.type !== 'texture').length === 0
+
   // ── Which dimensions this candidate changes ──
   const hasText = mutable.some((e) => e.type === 'text')
   const hasShape = mutable.some((e) => e.type === 'shape')
   const applicable: Dimension[] = DIMENSIONS.filter((d) => (d === 'type' ? hasText : d === 'shape' ? hasShape : d === 'subtraction' ? mutable.length >= 3 : true))
   const dims = new Set<Dimension>(['composition'])
   const others = applicable.filter((d) => d !== 'composition')
-  const want = opts.tier === 'close' ? 0 : opts.tier === 'mid' ? 1 : opts.widen ? others.length : Math.max(2, Math.min(others.length, 2 + (chance(rng, 0.35) ? 1 : 0)))
+  const want = starter || opts.tier === 'close' ? 0 : opts.tier === 'mid' ? 1 : opts.widen ? others.length : Math.max(2, Math.min(others.length, 2 + (chance(rng, 0.35) ? 1 : 0)))
   if (want > 0) {
     const subChance = opts.tier === 'mid' ? RULES.tiers.subtractionChance.mid : RULES.tiers.subtractionChance.far
     if (others.includes('subtraction') && chance(rng, subChance)) dims.add('subtraction')
@@ -366,25 +402,10 @@ export function generateCandidate(base: InspoPage, sig: Signature, baseM: Measur
     tategakiTreatment(t, rng)
     keepTextInside(t, base.w, base.h)
   }
-  // An empty page gets a pool text — only then (content is otherwise never invented).
-  if (!sig.text.hasText && live().length + added.length < RULES.restraint.maxElements && live().length === 0 && chance(rng, 0.4)) {
-    const fonts = ctx.fonts.filter((f) => JP_SERIFS.includes(f))
-    const font = fonts.length ? pick(rng, fonts) : ctx.fonts[0] ?? 'Noto Serif JP'
-    const roll = rng()
-    const t = roll < 0.45 ? mk('text', { text: pick(rng, JP_WORDS), font, size: Math.round(between(rng, 28, 48) * k), weight: 400, vertical: true, tracking: Math.round(between(rng, 0.1, 0.2) * 100) / 100, color: sig.palette.darkest })
-      : roll < 0.75 ? mk('text', { text: pick(rng, CHARS), font, size: Math.round(between(rng, 60, 110) * k), weight: 600, vertical: true, tracking: 0.12, color: sig.palette.darkest })
-      : mk('text', { text: pick(rng, CAPTIONS), font: ctx.fonts.includes('Geist Mono') ? 'Geist Mono' : font, size: Math.round(between(rng, RULES.size.captionMin, RULES.size.captionMax) * k), weight: 400, vertical: false, tracking: 0.3, color: sig.palette.darkest })
-    placeAt(t, t.v.vertical ? takeSlot(vSlots) : takeSlot(hSlots))
-    keepTextInside(t, base.w, base.h)
-    added.push(t)
-  }
-
   // ── Shape / type / palette dimensions ──
   const working = [...live(), ...added]
   if (dims.has('shape') && !moveShape(working.filter((e) => e.type === 'shape'), rng, k, sig.palette.inks)) dims.delete('shape')
   if (dims.has('type') && !moveType(working.filter((e) => e.type === 'text'), rng, ctx.fonts)) dims.delete('type')
-  let bg = base.bg
-  let paletteName: string | undefined
   if (dims.has('palette')) {
     const r = movePalette(working, sig, rng, ctx)
     bg = r.bg
@@ -405,7 +426,7 @@ export function generateCandidate(base: InspoPage, sig: Signature, baseM: Measur
   }
 
   const els = [...all.filter((e) => !removed.has(e.id)), ...added]
-  return { seed: `${batchSeed}·${tryIndex}`, tryIndex, archetype, tier: opts.tier, dims: [...dims], els, bg, paletteName }
+  return { seed: `${batchSeed}·${tryIndex}`, tryIndex, archetype, tier: starter ? 'close' : opts.tier, dims: [...dims], els, bg, paletteName }
 }
 
 export { designEls }

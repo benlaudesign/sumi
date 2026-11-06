@@ -61,7 +61,9 @@ export function analyticRules(c: Candidate, base: InspoPage, sig: Signature, bas
 
   // Palette discipline: ≤ N inks; locked to the signature for close/mid.
   const inks = [...new Set(live.map(elColor).filter((x): x is string => !!x && x !== c.bg))]
-  const locked = c.tier === 'far' || inks.every((x) => sig.palette.locked.includes(x))
+  // An empty page has no palette to lock to — starters bring their own.
+  const baseEmpty = designEls(base.els).length === 0
+  const locked = c.tier === 'far' || baseEmpty || inks.every((x) => sig.palette.locked.includes(x))
   out.push(rule('palette', 'Palette ≤ 3 inks' + (c.tier === 'far' ? '' : ', locked'), true, inks.length <= RULES.palette.maxInks && locked, 1 - Math.max(0, inks.length - 1) / RULES.palette.maxInks, locked ? `${inks.length} ink${inks.length === 1 ? '' : 's'}${c.paletteName ? ` · ${c.paletteName}` : ''}` : 'colour outside the signature'))
 
   // Fidelity: text content exact; close/mid keep a source shape kind; far
