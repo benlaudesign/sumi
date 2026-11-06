@@ -68,7 +68,7 @@ export const SHORTCUTS: Shortcut[] = [
   S('addShape', 'Sumi', 'Add shape', [{ code: 'KeyS' }]),
   S('addDots', 'Sumi', 'Add dots', [{ code: 'KeyD' }]),
   S('addText', 'Sumi', 'Add text', [{ code: 'KeyT' }]),
-  S('addMaterial', 'Sumi', 'Add material', [{ code: 'KeyM' }]),
+  S('addTexture', 'Sumi', 'Add texture', [{ code: 'KeyX' }]),
   S('addAscii', 'Sumi', 'Add ascii', [{ code: 'KeyA' }]),
   S('addImage', 'Sumi', 'Add image', [{ code: 'KeyI' }]),
   S('addSubject', 'Sumi', 'Add subject', [{ code: 'KeyK' }]),

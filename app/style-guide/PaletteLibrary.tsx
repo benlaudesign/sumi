@@ -10,19 +10,19 @@ interface Palette {
 
 const RESTRAINED: Record<string, Palette> = {
   Tokens: { paper: '#f4f4f2', ink: '#111111', accent: '#bc002d', alt: '#e13834' },
-  'Red / black': { paper: '#f6f3ec', ink: '#141414', accent: '#d93a2b', alt: '#141414' },
+  'Scarlet': { paper: '#f6f3ec', ink: '#141414', accent: '#d93a2b', alt: '#141414' },
   Indigo: { paper: '#f2efe6', ink: '#1c3461', accent: '#2c4e8f', alt: '#101f3c' },
-  'Red / cream': { paper: '#f1e8d7', ink: '#3a2e26', accent: '#c73e2e', alt: '#a8322a' },
-  'Ink + red': { paper: '#f7f6f2', ink: '#0e0e0e', accent: '#0e0e0e', alt: '#bc002d' },
+  'Cream': { paper: '#f1e8d7', ink: '#3a2e26', accent: '#c73e2e', alt: '#a8322a' },
+  'Sumi': { paper: '#f7f6f2', ink: '#0e0e0e', accent: '#0e0e0e', alt: '#bc002d' },
 }
 
 const EXPRESSIVE: Record<string, Palette> = {
-  'Teal / pink': { paper: '#f2ede3', ink: '#1c1c1c', accent: '#2fa8a0', alt: '#e2789f' },
-  'Yellow field': { paper: '#f0c93d', ink: '#241f1a', accent: '#d8432b', alt: '#f6ecd2' },
+  'Teal': { paper: '#f2ede3', ink: '#1c1c1c', accent: '#2fa8a0', alt: '#e2789f' },
+  'Yellow': { paper: '#f0c93d', ink: '#241f1a', accent: '#d8432b', alt: '#f6ecd2' },
   Ultramarine: { paper: '#ece7da', ink: '#20439c', accent: '#d8386b', alt: '#e5d44a' },
   Sunset: { paper: '#f4e3c2', ink: '#22304e', accent: '#c23a2b', alt: '#e88a3a' },
-  'Green / gold': { paper: '#f0ead8', ink: '#232323', accent: '#7c9b3f', alt: '#c9a23f' },
-  'Indigo sea': { paper: '#e9e4d6', ink: '#2b3a6b', accent: '#d84b33', alt: '#4aa5a2' },
+  'Olive': { paper: '#f0ead8', ink: '#232323', accent: '#7c9b3f', alt: '#c9a23f' },
+  'Sea': { paper: '#e9e4d6', ink: '#2b3a6b', accent: '#d84b33', alt: '#4aa5a2' },
 }
 
 function PaletteGroup({ label, group }: { label: string; group: Record<string, Palette> }) {

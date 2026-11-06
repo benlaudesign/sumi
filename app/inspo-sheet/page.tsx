@@ -13,7 +13,7 @@ import { RULES, runInspo, type InspoEl, type InspoResult, type Scored } from '..
 
 const W = 900
 const H = 1200
-const p = PALETTES['Ink / vermilion']
+const p = PALETTES['Vermilion']
 
 function el(id: number, type: El['type'], patch: Record<string, unknown>): El {
   return { id, type, v: deepMerge(DEFAULTS[type](p), patch) as El['v'] }
