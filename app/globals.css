@@ -61,3 +61,9 @@ h6 {
 g[data-locked] * {
   pointer-events: none !important;
 }
+
+/* Sumi's one accent — the vermilion the brand dot, selection rails and
+   Revert button reach for via bg-red / text-red / border-red. */
+@theme {
+  --color-red: #e13834;
+}
