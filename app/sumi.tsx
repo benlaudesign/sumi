@@ -14,6 +14,9 @@ import { createPortal, flushSync } from 'react-dom'
 import { createRoot, type Root } from 'react-dom/client'
 import { FEATURES } from '../src/config/features'
 import { Kbd } from '../src/components/Kbd'
+import { Tip } from '../src/components/Tip'
+import { CheatSheet } from '../src/components/CheatSheet'
+import { isMacPlatform, matchShortcut, shortcutChips } from '../src/config/shortcuts'
 import { MIN_EDITOR_WIDTH } from '../src/config/layout'
 import { runInspo, type InspoContext, type InspoEl, type InspoMode, type InspoPage, type InspoResult, type Scored } from '../src/inspo'
 
@@ -9112,6 +9115,10 @@ function SumiEditor() {
   // ⌘C / ⌘V / ⌘D element clipboard.
   const clipboardEls = useRef<El[]>([])
   const [exportOpen, setExportOpen] = useState(false)
+  const [cheatOpen, setCheatOpen] = useState(false)
+  const [uiHidden, setUiHidden] = useState(false) // ⌘\ — hide both side panels
+  const mac = useMemo(() => isMacPlatform(), [])
+  const kb = useCallback((id: string) => shortcutChips(id, mac), [mac])
   // Copy — split out from Export (which is download-only now): two copy
   // targets, defaulting to SVG per the brief ("default copy to svg").
   const [copyOpen, setCopyOpen] = useState(false)
@@ -10195,7 +10202,7 @@ function SumiEditor() {
     })
   }
 
-  const pasteClipboard = () => {
+  const pasteClipboard = (inPlace = false) => {
     const clip = clipboardEls.current
     if (clip.length === 0) return
     const room = LAYER_CAP - els.length
@@ -10208,10 +10215,13 @@ function SumiEditor() {
     const fresh = clip.slice(0, room).map((e) => {
       const copy = structuredClone(e)
       copy.id = nextId.current++
-      // Offset the copy so it never lands pixel-identical on the original.
-      const cv = copy.v as { x: number; y: number }
-      cv.x = Math.round((cv.x + 3) * 10) / 10
-      cv.y = Math.round((cv.y + 3) * 10) / 10
+      // Offset the copy so it never lands pixel-identical on the original
+      // — unless pasting in place (⌘⇧V).
+      if (!inPlace) {
+        const cv = copy.v as { x: number; y: number }
+        cv.x = Math.round((cv.x + 3) * 10) / 10
+        cv.y = Math.round((cv.y + 3) * 10) / 10
+      }
       return copy
     })
     setEls((list) => [...list, ...fresh])
@@ -10226,6 +10236,43 @@ function SumiEditor() {
     clipboardEls.current = structuredClone(picked)
     if (andPaste) pasteClipboard()
     else flash(`Copied ${picked.length === 1 ? layerLabel(picked[0]) : picked.length + ' elements'} — ⌘V to paste`)
+  }
+
+  // ⌘X — copy then delete, one undo step (removeSelected pushes it).
+  const cutSelected = () => {
+    const ids = new Set(selectedIds)
+    const picked = els.filter((e) => ids.has(e.id))
+    if (picked.length === 0) return
+    clipboardEls.current = structuredClone(picked)
+    removeSelected()
+    flash(`Cut ${picked.length === 1 ? layerLabel(picked[0]) : picked.length + ' elements'} — ⌘V to paste`)
+  }
+  const selectAll = () => setSelectedIds(els.filter((e) => !e.hidden && !e.locked).map((e) => e.id))
+  // ⌘⇧H / ⌘⇧L on the selection — one undo step for the group.
+  const hideSelected = () => {
+    if (selectedIds.length === 0) return
+    genStreak.current = false
+    pushUndo()
+    const ids = new Set(selectedIds)
+    setEls((list) => list.map((e) => (ids.has(e.id) ? { ...e, hidden: true } : e)))
+    setSelectedIds([])
+  }
+  const lockSelected = () => {
+    if (selectedIds.length === 0) return
+    genStreak.current = false
+    pushUndo()
+    const ids = new Set(selectedIds)
+    const allLocked = els.filter((e) => ids.has(e.id)).every((e) => e.locked)
+    setEls((list) => list.map((e) => (ids.has(e.id) ? { ...e, locked: !allLocked } : e)))
+    if (!allLocked) setSelectedIds([])
+  }
+  // Zoom: 1 = fit (the wrapper's width formula); 100% = artboard at its own px.
+  const zoomBy = (f: number) => setZoom((z) => Math.min(4, Math.max(0.25, Math.round(z * f * 1000) / 1000)))
+  const zoom100 = () => {
+    const r = svgRef.current?.getBoundingClientRect()
+    if (!r || r.width <= 0) return
+    const fitted = r.width / zoom
+    setZoom(Math.min(4, Math.max(0.25, Math.round((view.w / fitted) * 1000) / 1000)))
   }
 
   const applyPreset = (name: string) => {
@@ -12325,6 +12372,27 @@ function SumiEditor() {
   const addElRef = useRef<(t: ElType) => void>(() => {})
   addElRef.current = addEl
   const inspoRef = useRef<{ open: () => void; close: () => boolean }>({ open: () => {}, close: () => false })
+  // Everything the registry-driven keydown dispatcher (mounted once) calls.
+  const actRef = useRef<Record<string, () => void>>({})
+  actRef.current = {
+    cut: cutSelected,
+    pasteInPlace: () => pasteClipboard(true),
+    selectAll,
+    hide: hideSelected,
+    lock: lockSelected,
+    save: saveSlot,
+    zoomFit: () => setZoom(1),
+    zoom100,
+    zoomIn: () => zoomBy(1.25),
+    zoomOut: () => zoomBy(1 / 1.25),
+    toggleUI: () => setUiHidden((h) => !h),
+    export: () => setExportOpen((o) => !o),
+    cheatSheet: () => setCheatOpen((o) => !o),
+  }
+  const cheatOpenRef = useRef(false)
+  cheatOpenRef.current = cheatOpen
+  const macRef = useRef(mac)
+  macRef.current = mac
   const pushUndoCoalescedRef = useRef<(key: string) => void>(() => {})
   pushUndoCoalescedRef.current = pushUndoCoalesced
   // Escape cancels an open crop edit (reverting to whatever it was before
@@ -12385,16 +12453,23 @@ function SumiEditor() {
         return
       }
       if (inControl) {
-        // Focus sticks to sliders after canvas clicks (startDrag prevents the
-        // focus transfer), which used to make ⌘Z feel dead. Undo/redo pass
-        // through from NON-TEXT controls (range, checkbox, color, select) —
-        // only text-entry fields keep their native ⌘Z.
-        const metaZ = (e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'z'
-        if (textEntry || !metaZ) return
-        e.preventDefault()
-        if (e.shiftKey) redoRef.current()
-        else undoRef.current()
-        return
+        // Shortcuts are ignored while typing. Esc still works: it hands
+        // focus back to the canvas. Non-text controls (range, checkbox,
+        // color, select) — where focus sticks after touching any
+        // inspector dial — let undo/redo through so ⌘Z never feels dead.
+        if (e.key === 'Escape') {
+          if (textEntry) {
+            ;(t as HTMLElement).blur()
+            return
+          }
+        } else {
+          const metaZ = (e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'z'
+          if (textEntry || !metaZ) return
+          e.preventDefault()
+          if (e.shiftKey) redoRef.current()
+          else undoRef.current()
+          return
+        }
       }
       // Preview mode owns the keyboard: arrows cycle designs, Esc exits.
       if (previewRef.current) {
@@ -12411,113 +12486,98 @@ function SumiEditor() {
         }
         return
       }
+      // The cheat sheet is modal: Esc or ? closes it, nothing else fires.
+      if (cheatOpenRef.current) {
+        const scm = matchShortcut(e, macRef.current)
+        if (e.key === 'Escape' || scm?.id === 'cheatSheet') {
+          e.preventDefault()
+          actRef.current.cheatSheet()
+        }
+        return
+      }
       const ids = selectedIdsRef.current
-      const meta = e.metaKey || e.ctrlKey
-      // ⌘Z undo · ⇧⌘Z redo — work regardless of selection.
-      if (meta && !e.altKey && e.key.toLowerCase() === 'z') {
-        e.preventDefault()
-        if (e.shiftKey) redoRef.current()
-        else undoRef.current()
-        return
-      }
-      // Z-order: ⌘] forward · ⌘[ backward · ] to front · [ to back
-      if (ids.length > 0 && (e.key === ']' || e.key === '[')) {
-        e.preventDefault()
-        if (e.key === ']') zOrderRef.current(meta ? 'forward' : 'front')
-        else zOrderRef.current(meta ? 'backward' : 'back')
-        return
-      }
-      // Alignment: ⌥A/D left/right · ⌥W/S top/bottom · ⌥H/V centers ·
-      // ⌃⌥H/V distribute. e.code, because Option remaps letter keys on mac.
-      if (ids.length > 0 && e.altKey && !meta) {
-        if (e.ctrlKey && (e.code === 'KeyH' || e.code === 'KeyV')) {
-          e.preventDefault()
-          distributeRef.current(e.code === 'KeyH' ? 'h' : 'v')
-          return
-        }
-        const alignMap: Record<string, AlignMode> = {
-          KeyA: 'left', KeyD: 'right', KeyW: 'top', KeyS: 'bottom', KeyH: 'hcenter', KeyV: 'vcenter',
-        }
-        if (!e.ctrlKey && alignMap[e.code]) {
-          e.preventDefault()
-          alignRef.current(alignMap[e.code])
-          return
-        }
-      }
-      // Bare letters add elements: s/d/t/m spawn, i opens the image picker.
-      if (!meta && !e.altKey && !e.shiftKey) {
-        const addType = (Object.keys(EL_KEY) as ElType[]).find((k) => EL_KEY[k] === e.key && (k !== 'subject' || FEATURES.subject))
-        if (addType) {
-          e.preventDefault()
-          if (addType === 'image') fileInputRef.current?.click()
-          else addElRef.current(addType)
-          return
-        }
-        if (e.key === 'r') {
-          e.preventDefault()
-          inspoRef.current.open()
-          return
-        }
-        if (e.key === 'Escape') {
-          if (cropCancelRef.current()) return
-          if (inspoRef.current.close()) return
-          setSelectedIds([])
-          return
-        }
-      }
-      // ⌘C copy · ⌘V paste · ⌘D duplicate — element clipboard.
-      if (meta && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'c') {
-        if (ids.length === 0) return
-        e.preventDefault()
-        copyRef.current(false)
-        return
-      }
-      if (meta && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'v') {
-        e.preventDefault()
-        pasteRef.current()
-        return
-      }
-      if (meta && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'd') {
-        if (ids.length === 0) return
-        e.preventDefault()
-        copyRef.current(true)
-        return
-      }
-      if (ids.length === 0) {
-        if (e.key.startsWith('Arrow')) {
-          const dir = e.key === 'ArrowUp' || e.key === 'ArrowLeft' ? -1 : 1
+      const sc = matchShortcut(e, macRef.current)
+      if (!sc) return
+      if (sc.needsSelection && ids.length === 0) {
+        // Arrows with nothing selected flip through Saved.
+        if (sc.id === 'nudge' || sc.id === 'nudgeBig') {
+          const dir = e.code === 'ArrowUp' || e.code === 'ArrowLeft' ? -1 : 1
           if (slotNavRef.current(dir)) e.preventDefault()
         }
         return
       }
-      if (e.key === 'Backspace' || e.key === 'Delete') {
-        e.preventDefault()
-        removeSelectedRef.current()
-        return
+      const act = actRef.current
+      switch (sc.id) {
+        case 'undo': undoRef.current(); break
+        case 'redo': redoRef.current(); break
+        case 'copy': copyRef.current(false); break
+        case 'cut': act.cut(); break
+        case 'paste': pasteRef.current(); break
+        case 'pasteInPlace': act.pasteInPlace(); break
+        case 'duplicate': copyRef.current(true); break
+        case 'delete': removeSelectedRef.current(); break
+        case 'selectAll': act.selectAll(); break
+        case 'escape':
+          if (cropCancelRef.current()) break
+          if (inspoRef.current.close()) break
+          setSelectedIds([])
+          break
+        case 'save': act.save(); break
+        case 'forward': zOrderRef.current('forward'); break
+        case 'backward': zOrderRef.current('backward'); break
+        case 'front': zOrderRef.current('front'); break
+        case 'back': zOrderRef.current('back'); break
+        case 'alignLeft': alignRef.current('left'); break
+        case 'alignRight': alignRef.current('right'); break
+        case 'alignCenterX': alignRef.current('hcenter'); break
+        case 'alignTop': alignRef.current('top'); break
+        case 'alignBottom': alignRef.current('bottom'); break
+        case 'alignCenterY': alignRef.current('vcenter'); break
+        case 'distributeH': distributeRef.current('h'); break
+        case 'distributeV': distributeRef.current('v'); break
+        case 'hide': act.hide(); break
+        case 'lock': act.lock(); break
+        case 'zoomFit': act.zoomFit(); break
+        case 'zoom100': act.zoom100(); break
+        case 'zoomIn': act.zoomIn(); break
+        case 'zoomOut': act.zoomOut(); break
+        case 'pan': return // handled above (hold-to-pan)
+        case 'toggleUI': act.toggleUI(); break
+        case 'addShape': addElRef.current('shape'); break
+        case 'addDots': addElRef.current('halftone'); break
+        case 'addText': addElRef.current('text'); break
+        case 'addMaterial': addElRef.current('texture'); break
+        case 'addAscii': addElRef.current('ascii'); break
+        case 'addImage': fileInputRef.current?.click(); break
+        case 'addSubject':
+          if (!FEATURES.subject) return
+          addElRef.current('subject')
+          break
+        case 'inspo': inspoRef.current.open(); break
+        case 'export': act.export(); break
+        case 'cheatSheet': act.cheatSheet(); break
+        case 'nudge':
+        case 'nudgeBig': {
+          // Nudge in artboard % (0.5%, Shift = 5%); a burst of presses
+          // coalesces into one undo step.
+          const step = sc.id === 'nudgeBig' ? 5 : 0.5
+          const dx = e.code === 'ArrowLeft' ? -step : e.code === 'ArrowRight' ? step : 0
+          const dy = e.code === 'ArrowUp' ? -step : e.code === 'ArrowDown' ? step : 0
+          pushUndoCoalescedRef.current('nudge:' + ids.join(','))
+          const r4 = (n: number) => Math.round(n * 10000) / 10000
+          setEls((list) =>
+            list.map((el) =>
+              ids.includes(el.id) && !el.locked
+                ? { ...el, v: deepMerge(el.v, { x: r4((el.v as { x: number }).x + dx), y: r4((el.v as { y: number }).y + dy) }) }
+                : el,
+            ),
+          )
+          break
+        }
+        default:
+          return
       }
-      // Arrow keys nudge by exactly 1 canvas px (Shift = 10px) — positions
-      // are stored in %, so convert against the current canvas size.
-      const vw = viewRef.current
-      const px = e.shiftKey ? 10 : 1
-      const stepX = (px / vw.w) * 100
-      const stepY = (px / vw.h) * 100
-      let dx = 0
-      let dy = 0
-      if (e.key === 'ArrowLeft') dx = -stepX
-      else if (e.key === 'ArrowRight') dx = stepX
-      else if (e.key === 'ArrowUp') dy = -stepY
-      else if (e.key === 'ArrowDown') dy = stepY
-      else return
       e.preventDefault()
-      pushUndoCoalescedRef.current('nudge:' + ids.join(','))
-      const r4 = (n: number) => Math.round(n * 10000) / 10000
-      setEls((list) =>
-        list.map((el) =>
-          ids.includes(el.id) && !el.locked
-            ? { ...el, v: deepMerge(el.v, { x: r4((el.v as { x: number }).x + dx), y: r4((el.v as { y: number }).y + dy) }) }
-            : el,
-        ),
-      )
     }
     // Space's keyup: release the hand tool, and — only if this hold was
     // never claimed by an actual pan drag (see startPan) — fall through to
@@ -13115,16 +13175,18 @@ function SumiEditor() {
 
         <div className="flex items-center gap-1" role="group" aria-label="Add element">
           {(['shape', 'halftone', 'text', 'texture', 'ascii', 'subject'] as const).filter((t) => t !== 'subject' || FEATURES.subject).map((t) => (
-            <button
-              key={t}
-              type="button"
-              className={`${btn} select-none`}
-              disabled={els.length >= LAYER_CAP}
-              title={`Add ${EL_LABEL[t].toLowerCase()} — press ${EL_KEY[t]}, or drag onto the canvas`}
-              {...dragAddHandlers(t)}
-            >
-              + {EL_LABEL[t]}<Kbd>{EL_KEY[t]}</Kbd>
-            </button>
+            <Tip key={t} tip={`Add ${EL_LABEL[t].toLowerCase()} · or drag onto the canvas`} place="bottom-start">
+              <button
+                type="button"
+                className={`${btn} select-none`}
+                disabled={els.length >= LAYER_CAP}
+                aria-label={`Add ${EL_LABEL[t].toLowerCase()}`}
+                aria-keyshortcuts={EL_KEY[t]}
+                {...dragAddHandlers(t)}
+              >
+                + {EL_LABEL[t]}<Kbd>{EL_KEY[t]}</Kbd>
+              </button>
+            </Tip>
           ))}
           <input
             ref={fileInputRef}
@@ -13142,15 +13204,18 @@ function SumiEditor() {
               e.target.value = ''
             }}
           />
-          <button
-            type="button"
-            className={btn}
-            disabled={els.length >= LAYER_CAP}
-            title="Upload an image — or just drag one onto the canvas — press i"
-            onClick={() => fileInputRef.current?.click()}
-          >
-            + Image<Kbd>i</Kbd>
-          </button>
+          <Tip tip="Upload an image · or drop one onto the canvas" place="bottom-start">
+            <button
+              type="button"
+              className={btn}
+              disabled={els.length >= LAYER_CAP}
+              aria-label="Add image"
+              aria-keyshortcuts="i"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              + Image<Kbd>i</Kbd>
+            </button>
+          </Tip>
           <input
             ref={asciiFileInputRef}
             type="file"
@@ -13183,14 +13248,17 @@ function SumiEditor() {
           </button>
         )}
 
-        <button
-          type="button"
-          className={`${btn} ${inspoOpen ? 'border-neutral-600 bg-black/[0.05]' : ''}`}
-          onClick={() => (inspoOpen ? closeInspo() : openInspo())}
-          title="Inspo — six compositions that keep this page's signature — press r"
-        >
-          Inspo<Kbd>r</Kbd>
-        </button>
+        <Tip tip="Six compositions that keep this page's signature">
+          <button
+            type="button"
+            className={`${btn} ${inspoOpen ? 'border-neutral-600 bg-black/[0.05]' : ''}`}
+            onClick={() => (inspoOpen ? closeInspo() : openInspo())}
+            aria-keyshortcuts="r"
+            aria-expanded={inspoOpen}
+          >
+            Inspo<Kbd>r</Kbd>
+          </button>
+        </Tip>
         {hasCheckpoint && (
           <button
             type="button"
@@ -13201,11 +13269,11 @@ function SumiEditor() {
             Revert
           </button>
         )}
+        <Tip tip="Clear canvas · undoable">
         <button
           type="button"
           className={`${btn} px-1.5`}
           disabled={els.length === 0}
-          title="Clear canvas (undoable)"
           aria-label="Clear canvas"
           onClick={() => {
             genStreak.current = false
@@ -13219,22 +13287,27 @@ function SumiEditor() {
             <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6" />
           </svg>
         </button>
-        <button type="button" className={`${btn} px-1.5`} onClick={undo} disabled={!canUndo} title="Undo (⌘Z)" aria-label="Undo">
+        </Tip>
+        <Tip tip="Undo" keys={kb('undo')}>
+        <button type="button" className={`${btn} px-1.5`} onClick={undo} disabled={!canUndo} aria-label="Undo">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
             <path d="M9 14 4 9l5-5" />
             <path d="M4 9h10a6 6 0 0 1 0 12h-3" />
           </svg>
         </button>
-        <button type="button" className={`${btn} px-1.5`} onClick={redo} disabled={!canRedo} title="Redo (⇧⌘Z)" aria-label="Redo">
+        </Tip>
+        <Tip tip="Redo" keys={kb('redo')}>
+        <button type="button" className={`${btn} px-1.5`} onClick={redo} disabled={!canRedo} aria-label="Redo">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
             <path d="m15 14 5-5-5-5" />
             <path d="M20 9H10a6 6 0 0 0 0 12h3" />
           </svg>
         </button>
+        </Tip>
+        <Tip tip="Preview on a clean backdrop · ←/→ cycle · Esc exits">
         <button
           type="button"
           className={btn}
-          title="Preview — isolate the design on a clean backdrop (←/→ cycles, Esc exits)"
           onClick={() => {
             setPreviewIdx(loc.kind === 'page' ? loc.idx : pages.length + Math.max(0, slots.findIndex((s) => s.id === loc.id)))
             setPreview(true)
@@ -13242,14 +13315,19 @@ function SumiEditor() {
         >
           Preview
         </button>
+        </Tip>
         <div className="relative">
+          <Tip tip="Copy as SVG or React" place="bottom-end">
           <button
             type="button"
             className="rounded border border-neutral-300 px-3 py-1 font-mono text-[11px] text-neutral-700 transition-colors duration-150 hover:border-neutral-500 hover:text-ink"
             onClick={() => setCopyOpen((o) => !o)}
+            aria-expanded={copyOpen}
+            aria-haspopup="menu"
           >
             Copy ▾
           </button>
+          </Tip>
           {copyOpen && (
             <>
               <div className="fixed inset-0 z-[98]" onClick={() => setCopyOpen(false)} />
@@ -13346,13 +13424,17 @@ function SumiEditor() {
           )}
         </div>
         <div className="relative">
+          <Tip tip="Export" keys={kb('export')} place="bottom-end">
           <button
             type="button"
             className="rounded border border-ink bg-ink px-3 py-1 font-mono text-[11px] text-paper hover:bg-neutral-800 transition-colors duration-150"
             onClick={() => setExportOpen((o) => !o)}
+            aria-expanded={exportOpen}
+            aria-haspopup="dialog"
           >
             Export ▾
           </button>
+          </Tip>
           {exportOpen && (
             <>
               {/* click-away backdrop */}
@@ -13602,6 +13684,7 @@ function SumiEditor() {
 
       <div className="flex min-h-0 flex-1">
         {/* ── Left pane: pages, layers, saved slots ── */}
+        {!uiHidden && (
         <aside className="flex w-56 shrink-0 flex-col gap-5 overflow-y-auto border-r border-neutral-300 bg-paper p-3">
           <section>
             <div className="flex items-center justify-between">
@@ -13908,6 +13991,7 @@ function SumiEditor() {
             })()}
           </section>
         </aside>
+        )}
 
         {/* ── Canvas + timeline column ── */}
         <div className="flex min-w-0 flex-1 flex-col">
@@ -14655,6 +14739,7 @@ function SumiEditor() {
         </div>
 
         {/* ── Inspector (DialKit controls inline) ── */}
+        {!uiHidden && (
         <aside className="w-80 shrink-0 overflow-y-auto bg-[#212121] p-3">
           {selectedIds.length > 1 ? (
             <>
@@ -15798,9 +15883,11 @@ function SumiEditor() {
             </>
           )}
         </aside>
+        )}
       </div>
 
       {/* Context menu for page / saved rows */}
+      {cheatOpen && <CheatSheet mac={mac} onClose={() => setCheatOpen(false)} hidden={FEATURES.subject ? [] : ['addSubject']} />}
       {ctxMenu && (
         <>
           <div
